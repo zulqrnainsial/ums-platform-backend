@@ -328,7 +328,12 @@ private function transferApplicantToStudentDepartment(
         programId: $academicTarget['program_id'],
         userId: $userId
     );
-
+$this->syncApplicantDataToStudent(
+    tenantId: $tenantId,
+    studentId: $studentId,
+    applicant: $applicant,
+    userId: $userId
+);
     $this->updateTransferStatus(
         admissionMeritListApplicantId: $admissionMeritListApplicantId,
         confirmationId: $confirmationId,
@@ -851,6 +856,307 @@ public function transferConfirmedApplicant(Request $request, int $confirmationId
         'data' => $transfer,
         'message' => 'Confirmed applicant transferred to student successfully.',
     ]);
+}
+private function syncApplicantDataToStudent(
+    ?int $tenantId,
+    int $studentId,
+    object $applicant,
+    ?int $userId
+): void {
+    $this->copyApplicantQualificationsToStudent(
+        tenantId: $tenantId,
+        studentId: $studentId,
+        applicantId: (int) $applicant->id,
+        userId: $userId
+    );
+
+    $this->copyApplicantDocumentsToStudent(
+        tenantId: $tenantId,
+        studentId: $studentId,
+        applicantId: (int) $applicant->id,
+        userId: $userId
+    );
+
+    $this->copyApplicantGuardianToStudent(
+        tenantId: $tenantId,
+        studentId: $studentId,
+        applicant: $applicant,
+        userId: $userId
+    );
+}
+
+private function copyApplicantQualificationsToStudent(
+    ?int $tenantId,
+    int $studentId,
+    int $applicantId,
+    ?int $userId
+): void {
+    if (
+        !Schema::hasTable('applicant_qualifications') ||
+        !Schema::hasTable('student_previous_educations')
+    ) {
+        return;
+    }
+
+    $qualifications = DB::table('applicant_qualifications')
+    ->when(
+        Schema::hasColumn('applicant_qualifications', 'tenant_id') && $tenantId,
+        fn ($q) => $q->where('tenant_id', $tenantId)
+    )
+    ->where('applicant_id', $applicantId)
+    ->when(
+        Schema::hasColumn('applicant_qualifications', 'deleted_at'),
+        fn ($q) => $q->whereNull('deleted_at')
+    )
+    ->get();
+
+    foreach ($qualifications as $qualification) {
+        $exists = DB::table('student_previous_educations')
+            ->when(
+                Schema::hasColumn('student_previous_educations', 'tenant_id') && $tenantId,
+                fn ($q) => $q->where('tenant_id', $tenantId)
+            )
+            ->where('student_id', $studentId)
+            ->when(
+                Schema::hasColumn('student_previous_educations', 'qualification_level_id'),
+                fn ($q) => $q->where('qualification_level_id', $qualification->qualification_level_id ?? null)
+            )
+            ->when(
+                Schema::hasColumn('student_previous_educations', 'degree_class_name'),
+                fn ($q) => $q->where('degree_class_name', $qualification->degree_class_name ?? null)
+            )
+            ->when(
+                Schema::hasColumn('student_previous_educations', 'passing_year'),
+                fn ($q) => $q->where('passing_year', $qualification->passing_year ?? null)
+            )
+            ->first();
+
+        if ($exists) {
+            continue;
+        }
+
+        $payload = $this->filterColumns('student_previous_educations', [
+            'tenant_id' => $tenantId,
+            'student_id' => $studentId,
+
+            'qualification_level_id' => $qualification->qualification_level_id ?? null,
+            'education_board_id' => $qualification->education_board_id ?? null,
+            'external_institution_id' => $qualification->external_institution_id ?? null,
+
+            'degree_class_name' => $qualification->degree_class_name ?? null,
+            'roll_no' => $qualification->roll_no ?? null,
+            'registration_no' => $qualification->registration_no ?? null,
+            'passing_year' => $qualification->passing_year ?? null,
+
+            'total_marks' => $qualification->total_marks ?? null,
+            'obtained_marks' => $qualification->obtained_marks ?? null,
+            'percentage' => $qualification->percentage ?? null,
+            'grade' => $qualification->grade ?? null,
+            'cgpa' => $qualification->cgpa ?? null,
+
+            'remarks' => $qualification->remarks ?? null,
+            'status' => 'active',
+
+            'created_by' => $userId,
+            'updated_by' => $userId,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        if (!empty($payload)) {
+            DB::table('student_previous_educations')->insert($payload);
+        }
+    }
+}
+
+private function copyApplicantDocumentsToStudent(
+    ?int $tenantId,
+    int $studentId,
+    int $applicantId,
+    ?int $userId
+): void {
+    if (
+        !Schema::hasTable('applicant_documents') ||
+        !Schema::hasTable('student_documents')
+    ) {
+        return;
+    }
+
+    $documents = DB::table('applicant_documents')
+    ->when(
+        Schema::hasColumn('applicant_documents', 'tenant_id') && $tenantId,
+        fn ($q) => $q->where('tenant_id', $tenantId)
+    )
+    ->where('applicant_id', $applicantId)
+    ->when(
+        Schema::hasColumn('applicant_documents', 'deleted_at'),
+        fn ($q) => $q->whereNull('deleted_at')
+    )
+    ->get();
+
+    foreach ($documents as $document) {
+        $filePath = $document->file_path ?? null;
+
+        $exists = DB::table('student_documents')
+            ->when(
+                Schema::hasColumn('student_documents', 'tenant_id') && $tenantId,
+                fn ($q) => $q->where('tenant_id', $tenantId)
+            )
+            ->where('student_id', $studentId)
+            ->when($filePath, fn ($q) => $q->where('file_path', $filePath))
+            ->when(!$filePath, fn ($q) => $q->where('document_title', $document->document_title ?? null))
+            ->first();
+
+        if ($exists) {
+            continue;
+        }
+
+        $verificationStatus = $document->verification_status_code ?? 'pending';
+
+        if (!in_array($verificationStatus, ['pending', 'verified', 'rejected'], true)) {
+            $verificationStatus = 'pending';
+        }
+
+        $payload = $this->filterColumns('student_documents', [
+            'tenant_id' => $tenantId,
+            'student_id' => $studentId,
+
+            'document_type_id' => $document->document_type_id ?? null,
+            'document_title' => $document->document_title ?? 'Document',
+            'document_type' => $document->related_table ?? null,
+
+            'file_path' => $document->file_path ?? null,
+            'file_name' => $document->original_file_name
+                ?? $document->stored_file_name
+                ?? null,
+
+            'mime_type' => $document->mime_type ?? null,
+            'file_size' => $document->file_size ?? null,
+
+            'uploaded_by_student' => false,
+            'uploaded_at' => $document->created_at ?? now(),
+
+            'verification_status' => $verificationStatus,
+            'verified_at' => $document->verified_at ?? null,
+            'verified_by' => $document->verified_by ?? null,
+
+            'remarks' => $document->remarks ?? $document->rejection_reason ?? null,
+            'status' => 'active',
+
+            'created_by' => $userId,
+            'updated_by' => $userId,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        if (!empty($payload)) {
+            DB::table('student_documents')->insert($payload);
+        }
+    }
+}
+
+private function copyApplicantGuardianToStudent(
+    ?int $tenantId,
+    int $studentId,
+    object $applicant,
+    ?int $userId
+): void {
+    if (
+        !Schema::hasTable('guardians') ||
+        !Schema::hasTable('student_guardians')
+    ) {
+        return;
+    }
+
+    $guardianName = $applicant->father_name
+        ?? $applicant->guardian_name
+        ?? null;
+
+    if (!$guardianName) {
+        return;
+    }
+
+    $guardianCnic = $applicant->father_cnic
+        ?? $applicant->guardian_cnic
+        ?? null;
+
+    $guardianPhone = $applicant->father_phone
+        ?? $applicant->guardian_phone
+        ?? $applicant->phone
+        ?? null;
+
+    $guardianEmail = $applicant->guardian_email
+        ?? null;
+
+    $guardian = DB::table('guardians')
+        ->when(
+            Schema::hasColumn('guardians', 'tenant_id') && $tenantId,
+            fn ($q) => $q->where('tenant_id', $tenantId)
+        )
+        ->where(function ($q) use ($guardianName, $guardianCnic, $guardianPhone) {
+            $q->where('name', $guardianName);
+
+            if ($guardianCnic) {
+                $q->orWhere('cnic', $guardianCnic);
+            }
+
+            if ($guardianPhone) {
+                $q->orWhere('phone', $guardianPhone);
+            }
+        })
+        ->first();
+
+    if (!$guardian) {
+        $guardianPayload = $this->filterColumns('guardians', [
+            'tenant_id' => $tenantId,
+            'name' => $guardianName,
+            'cnic' => $guardianCnic,
+            'phone' => $guardianPhone,
+            'email' => $guardianEmail,
+            'address' => $applicant->permanent_address ?? $applicant->current_address ?? null,
+            'country_id' => $applicant->country_id ?? null,
+            'province_id' => $applicant->province_id ?? null,
+            'city_id' => $applicant->city_id ?? null,
+            'status' => 'active',
+            'created_by' => $userId,
+            'updated_by' => $userId,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $guardianId = DB::table('guardians')->insertGetId($guardianPayload);
+    } else {
+        $guardianId = (int) $guardian->id;
+    }
+
+    $alreadyLinked = DB::table('student_guardians')
+        ->when(
+            Schema::hasColumn('student_guardians', 'tenant_id') && $tenantId,
+            fn ($q) => $q->where('tenant_id', $tenantId)
+        )
+        ->where('student_id', $studentId)
+        ->where('guardian_id', $guardianId)
+        ->first();
+
+    if ($alreadyLinked) {
+        return;
+    }
+
+    $linkPayload = $this->filterColumns('student_guardians', [
+        'tenant_id' => $tenantId,
+        'student_id' => $studentId,
+        'guardian_id' => $guardianId,
+        'is_primary' => true,
+        'is_emergency_contact' => true,
+        'can_pick_student' => true,
+        'status' => 'active',
+        'created_by' => $userId,
+        'updated_by' => $userId,
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+
+    DB::table('student_guardians')->insert($linkPayload);
 }
     private function filterColumns(string $table, array $payload): array
     {

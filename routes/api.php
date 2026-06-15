@@ -309,7 +309,10 @@ Route::prefix('student-management')->group(function () {
 
     Route::get('/lifecycle/context', [StudentAcademicController::class, 'lifecycleContext']);
     Route::post('/students/{studentId}/lifecycle-action', [StudentAcademicController::class, 'applyLifecycleAction']);
-
+Route::patch(
+    '/student-documents/{documentId}/verify',
+    [StudentAcademicController::class, 'verifyStudentDocument']
+);
     Route::prefix('student-requests')->group(function () {
         Route::get('/', [StudentRequestAdminController::class, 'index']);
         Route::get('/{requestId}', [StudentRequestAdminController::class, 'show']);

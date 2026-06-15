@@ -1627,14 +1627,38 @@ private function optionAvailableCourses(int $tenantId, array $filters): array
             'id' => $row->id,
             'label' => trim(($row->course_code ?? '') . ' - ' . ($row->course_title ?? '')),
             'subject_id' => $row->subject_id,
-            'course_code' => $row->course_code,
-            'course_title' => $row->course_title,
+            'course_code' => $row->course_code ?? $row->subject_code ?? null,
+'course_title' => $row->course_title ?? $row->subject_name ?? null,
             'credit_hours' => $row->credit_hours,
         ])
         ->values()
         ->toArray();
 }
+public function courseRegistrationContext(int $studentId): array
+{
+    $tenantId = $this->tenantId();
 
+    $student = DB::table('students')
+        ->where('tenant_id', $tenantId)
+        ->where('id', $studentId)
+        ->first();
+
+    abort_if(!$student, 404, 'Student not found.');
+
+    $enrollment = DB::table('student_enrollments')
+        ->where('tenant_id', $tenantId)
+        ->where('student_id', $studentId)
+        ->orderByDesc('id')
+        ->first();
+
+    abort_if(!$enrollment, 404, 'Student enrollment not found.');
+
+    return [
+        'student' => $student,
+        'current_enrollment' => $enrollment,
+        'registered_courses' => $this->registeredCourses($studentId),
+    ];
+}
 public function availableCourses(int $studentId, array $filters): array
 {
     $tenantId = $this->tenantId();
@@ -1699,6 +1723,8 @@ public function availableCourses(int $studentId, array $filters): array
         ->select([
             'cs.id as curriculum_subject_id',
             DB::raw(Schema::hasColumn('curriculum_subjects', 'curriculum_id') ? 'cs.curriculum_id' : 'NULL as curriculum_id'),
+            DB::raw(Schema::hasColumn('curriculum_subjects', 'subject_code') ? 'cs.subject_code as course_code' : 'NULL as course_code'),
+            DB::raw(Schema::hasColumn('curriculum_subjects', 'subject_name') ? 'cs.subject_name as course_title' : 'NULL as course_title'),
             DB::raw(Schema::hasColumn('curriculum_subjects', 'subject_id') ? 'cs.subject_id' : 'NULL as subject_id'),
             DB::raw(Schema::hasColumn('curriculum_subjects', 'program_id') ? 'cs.program_id' : 'NULL as program_id'),
             DB::raw(Schema::hasColumn('curriculum_subjects', 'academic_term_id') ? 'cs.academic_term_id' : 'NULL as academic_term_id'),
@@ -1718,14 +1744,14 @@ public function availableCourses(int $studentId, array $filters): array
         'courses' => $rows->map(fn ($row) => [
             'curriculum_subject_id' => $row->curriculum_subject_id,
             'curriculum_id' => $row->curriculum_id,
-            'subject_id' => $row->subject_id,
+            'subject_id' => $row->subject_id ?? null,
             'program_id' => $row->program_id,
             'academic_term_id' => $row->academic_term_id,
-            'term_no' => $row->term_no,
-            'course_code' => $row->course_code,
-            'course_title' => $row->course_title,
+            'term_no' => $row->term_no ?? $row->term_number ?? null,
+            'course_code' => $row->course_code ?? $row->subject_code ?? null,
+'course_title' => $row->course_title ?? $row->subject_name ?? null,
             'credit_hours' => $row->credit_hours,
-            'subject_type_code' => $row->subject_type_code,
+            'subject_type_code' => $row->subject_type_code ?? $row->subject_nature ?? null,
             'already_registered' => in_array($row->curriculum_subject_id, $registeredCurriculumSubjectIds, true)
                 || (!empty($row->subject_id) && in_array($row->subject_id, $registeredSubjectIds, true)),
         ])->values()->toArray(),
@@ -2208,7 +2234,119 @@ public function updateEnrollmentAllocation(int $enrollmentId, array $data): arra
         'updated_fields' => array_keys($payload),
     ];
 }
+private function ensureEnrollmentNumberIsUnique(
+    $tenantId,
+    string $column,
+    ?string $value,
+    $ignoreEnrollmentId = null
+): void {
+    if (!$value) {
+        return;
+    }
 
+    if (!Schema::hasTable('student_enrollments')) {
+        return;
+    }
+
+    if (!Schema::hasColumn('student_enrollments', $column)) {
+        return;
+    }
+
+    $allowedColumns = [
+        'roll_no',
+        'registration_no',
+        'enrollment_no',
+    ];
+
+    if (!in_array($column, $allowedColumns, true)) {
+        return;
+    }
+
+    $ignoreEnrollmentId = is_numeric($ignoreEnrollmentId)
+        ? (int) $ignoreEnrollmentId
+        : null;
+
+    $tenantId = is_numeric($tenantId)
+        ? (int) $tenantId
+        : null;
+
+    $query = DB::table('student_enrollments')
+        ->where($column, $value);
+
+    if (Schema::hasColumn('student_enrollments', 'tenant_id') && $tenantId) {
+        $query->where('tenant_id', $tenantId);
+    }
+
+    if ($ignoreEnrollmentId) {
+        $query->where('id', '!=', $ignoreEnrollmentId);
+    }
+
+    $exists = $query->exists();
+
+    abort_if(
+        $exists,
+        422,
+        ucfirst(str_replace('_', ' ', $column)) . " already exists: {$value}"
+    );
+}
+public function verifyStudentDocument(int $documentId, array $data): array
+{
+    $tenantId = $this->tenantId();
+
+    abort_if(!Schema::hasTable('student_documents'), 404, 'Student documents table not found.');
+
+    $allowedStatuses = [
+        'pending',
+        'verified',
+        'rejected',
+        'resubmission_required',
+    ];
+
+    $status = strtolower(trim((string) $data['verification_status']));
+
+    abort_if(
+        !in_array($status, $allowedStatuses, true),
+        422,
+        'Invalid document verification status.'
+    );
+
+    $document = DB::table('student_documents')
+        ->where('id', $documentId)
+        ->when(
+            Schema::hasColumn('student_documents', 'tenant_id') && $tenantId,
+            fn ($q) => $q->where('tenant_id', $tenantId)
+        )
+        ->first();
+
+    abort_if(!$document, 404, 'Student document not found.');
+
+    $payload = [
+        'verification_status' => $status,
+        'remarks' => $data['remarks'] ?? null,
+        'updated_at' => now(),
+    ];
+
+    if (Schema::hasColumn('student_documents', 'verified_at')) {
+        $payload['verified_at'] = $status === 'verified' ? now() : null;
+    }
+
+    if (Schema::hasColumn('student_documents', 'verified_by')) {
+        $payload['verified_by'] = $status === 'verified' ? auth()->id() : null;
+    }
+
+    if (Schema::hasColumn('student_documents', 'updated_by')) {
+        $payload['updated_by'] = auth()->id();
+    }
+
+    DB::table('student_documents')
+        ->where('id', $documentId)
+        ->update($payload);
+
+    return [
+        'document_id' => $documentId,
+        'verification_status' => $status,
+    ];
+}
     private function tenantId(): int
     {
         $user = auth()->user();

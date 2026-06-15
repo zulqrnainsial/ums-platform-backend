@@ -171,6 +171,21 @@ public function academicPlacementOptions(
         'Academic placement options fetched successfully.'
     );
 }
+public function verifyStudentDocument(
+    Request $request,
+    int $documentId,
+    StudentAcademicService $service
+): JsonResponse {
+    $validated = $request->validate([
+        'verification_status' => ['required', 'string', 'max:50'],
+        'remarks' => ['nullable', 'string', 'max:1000'],
+    ]);
+
+    return ApiResponse::success(
+        $service->verifyStudentDocument($documentId, $validated),
+        'Student document verification updated successfully.'
+    );
+}
 public function updateEnrollmentAllocation(
     Request $request,
     int $enrollmentId,
