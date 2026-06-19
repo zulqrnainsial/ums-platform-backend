@@ -253,7 +253,14 @@ class RBACPermissionSeeder extends Seeder
             'student.request.view',
             'student.request.review',
             'student.request.decide',
-
+            'student.course-registration.bulk',
+            'student.portal.course-registration',
+            'student.course-registration.bulk.view',
+            'student.course-registration.bulk.register',
+            'student.course-registration.settings.view',
+            'student.course-registration.settings.manage',
+            'student.portal.course-registration.view',      
+            'student.portal.course-registration.submit',
             /*
             |--------------------------------------------------------------------------
             | Admission
