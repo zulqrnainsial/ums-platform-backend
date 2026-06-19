@@ -57,6 +57,10 @@ use App\Modules\Admission\Controllers\ApplicantEditLockController;
 use App\Modules\Student\Controllers\StudentAcademicController;
 use App\Modules\Student\Controllers\StudentPortalController;
 use App\Modules\Student\Controllers\StudentRequestAdminController;
+use App\Modules\Attendance\Controllers\AttendanceMarkingController;
+use App\Modules\Attendance\Controllers\AttendanceSessionController;
+use App\Modules\Attendance\Controllers\AttendanceReportController;
+
 Route::get('/health', function () {
     return ApiResponse::success([
         'app' => config('app.name'),
@@ -243,27 +247,28 @@ Route::middleware(['auth:sanctum', 'tenant.active'])->group(function () {
         Route::post('/', [MenuController::class, 'store']);
         Route::get('/options', [MenuController::class, 'options']);
         Route::get('/tree', [MenuController::class, 'tree']);
+        Route::get('/next-display-order', [MenuController::class, 'nextDisplayOrder']);
         Route::get('/{menu}', [MenuController::class, 'show']);
         Route::put('/{menu}', [MenuController::class, 'update']);
         Route::delete('/{menu}', [MenuController::class, 'destroy']);
         Route::post('/{menu}/activate', [MenuController::class, 'activate']);
         Route::post('/{menu}/deactivate', [MenuController::class, 'deactivate']);
     });
-Route::prefix('admission/applicant-portal/applicants/{applicantId}/preference-group')->group(function () {
-    Route::get('/', [ApplicantPreferenceGroupController::class, 'adminShow']);
-    Route::post('/preferences', [ApplicantPreferenceGroupController::class, 'adminAddPreference']);
-    Route::patch('/reorder', [ApplicantPreferenceGroupController::class, 'adminReorder']);
-    Route::delete('/preferences/{applicationId}', [ApplicantPreferenceGroupController::class, 'adminRemove']);
-    Route::post('/{groupId}/submit', [ApplicantPreferenceGroupController::class, 'adminSubmit']);
-});
-Route::prefix('platform/dynamic-field-storage-rules')->group(function () {
-    Route::get('/', [DynamicFieldStorageRuleController::class, 'index']);
-    Route::get('/{moduleCode}/{entityKey}', [DynamicFieldStorageRuleController::class, 'entity']);
-});
-Route::get(
-    '/platform/dynamic-field-storage-validation',
-    [DynamicFieldStorageValidationController::class, 'index']
-);
+    Route::prefix('admission/applicant-portal/applicants/{applicantId}/preference-group')->group(function () {
+        Route::get('/', [ApplicantPreferenceGroupController::class, 'adminShow']);
+        Route::post('/preferences', [ApplicantPreferenceGroupController::class, 'adminAddPreference']);
+        Route::patch('/reorder', [ApplicantPreferenceGroupController::class, 'adminReorder']);
+        Route::delete('/preferences/{applicationId}', [ApplicantPreferenceGroupController::class, 'adminRemove']);
+        Route::post('/{groupId}/submit', [ApplicantPreferenceGroupController::class, 'adminSubmit']);
+    });
+    Route::prefix('platform/dynamic-field-storage-rules')->group(function () {
+        Route::get('/', [DynamicFieldStorageRuleController::class, 'index']);
+        Route::get('/{moduleCode}/{entityKey}', [DynamicFieldStorageRuleController::class, 'entity']);
+    });
+    Route::get(
+        '/platform/dynamic-field-storage-validation',
+        [DynamicFieldStorageValidationController::class, 'index']
+    );
     /*
     |--------------------------------------------------------------------------
     | User Management
@@ -285,63 +290,73 @@ Route::get(
     |--------------------------------------------------------------------------
     */    
 
-Route::prefix('student-management')->group(function () {
-    Route::get('/students', [StudentAcademicController::class, 'students']);
-    Route::get('/students/{studentId}', [StudentAcademicController::class, 'showStudent']);
-    Route::patch('/students/{studentId}/status', [StudentAcademicController::class, 'updateStudentStatus']);
-    Route::patch('/students/{studentId}/profile', [StudentAcademicController::class, 'updateStudentProfile']);
-    Route::get('/students/{studentId}/profile-completion', [StudentAcademicController::class, 'profileCompletionSummary']);
+    Route::prefix('student-management')->group(function () {
+        Route::get('/students', [StudentAcademicController::class, 'students']);
+        Route::get('/students/{studentId}', [StudentAcademicController::class, 'showStudent']);
+        Route::patch('/students/{studentId}/status', [StudentAcademicController::class, 'updateStudentStatus']);
+        Route::patch('/students/{studentId}/profile', [StudentAcademicController::class, 'updateStudentProfile']);
+        Route::get('/students/{studentId}/profile-completion', [StudentAcademicController::class, 'profileCompletionSummary']);
 
-    Route::get('/enrollments', [StudentAcademicController::class, 'enrollments']);
-    Route::patch('/enrollments/{enrollmentId}', [StudentAcademicController::class, 'updateEnrollment']);
-    Route::patch('/enrollments/{enrollmentId}/allocation', [StudentAcademicController::class, 'updateEnrollmentAllocation']);
+        Route::get('/enrollments', [StudentAcademicController::class, 'enrollments']);
+        Route::patch('/enrollments/{enrollmentId}', [StudentAcademicController::class, 'updateEnrollment']);
+        Route::patch('/enrollments/{enrollmentId}/allocation', [StudentAcademicController::class, 'updateEnrollmentAllocation']);
 
-    Route::get('/academic-placement-options', [StudentAcademicController::class, 'academicPlacementOptions']);
+        Route::get('/academic-placement-options', [StudentAcademicController::class, 'academicPlacementOptions']);
 
-    Route::get('/students/{studentId}/course-registration/context', [StudentAcademicController::class, 'courseRegistrationContext']);
-    Route::get('/students/{studentId}/course-registration/available-courses', [StudentAcademicController::class, 'availableCourses']);
-    Route::get('/students/{studentId}/course-registration/registered-courses', [StudentAcademicController::class, 'registeredCourses']);
-    Route::post('/students/{studentId}/course-registration/register', [StudentAcademicController::class, 'registerCourses']);
-    Route::delete('/course-registration/{registrationId}', [StudentAcademicController::class, 'unregisterCourse']);
+        Route::get('/students/{studentId}/course-registration/context', [StudentAcademicController::class, 'courseRegistrationContext']);
+        Route::get('/students/{studentId}/course-registration/available-courses', [StudentAcademicController::class, 'availableCourses']);
+        Route::get('/students/{studentId}/course-registration/registered-courses', [StudentAcademicController::class, 'registeredCourses']);
+        Route::post('/students/{studentId}/course-registration/register', [StudentAcademicController::class, 'registerCourses']);
+        Route::delete('/course-registration/{registrationId}', [StudentAcademicController::class, 'unregisterCourse']);
 
-    Route::get('/section-batch-allocation/context', [StudentAcademicController::class, 'allocationContext']);
-    Route::post('/section-batch-allocation/bulk-allocate', [StudentAcademicController::class, 'bulkAllocate']);
+        Route::get('/section-batch-allocation/context', [StudentAcademicController::class, 'allocationContext']);
+        Route::post('/section-batch-allocation/bulk-allocate', [StudentAcademicController::class, 'bulkAllocate']);
 
-    Route::get('/lifecycle/context', [StudentAcademicController::class, 'lifecycleContext']);
-    Route::post('/students/{studentId}/lifecycle-action', [StudentAcademicController::class, 'applyLifecycleAction']);
-Route::patch(
-    '/student-documents/{documentId}/verify',
-    [StudentAcademicController::class, 'verifyStudentDocument']
-);
-    Route::prefix('student-requests')->group(function () {
-        Route::get('/', [StudentRequestAdminController::class, 'index']);
-        Route::get('/{requestId}', [StudentRequestAdminController::class, 'show']);
-        Route::post('/{requestId}/decision', [StudentRequestAdminController::class, 'decide']);
+        Route::get('/lifecycle/context', [StudentAcademicController::class, 'lifecycleContext']);
+        Route::post('/students/{studentId}/lifecycle-action', [StudentAcademicController::class, 'applyLifecycleAction']);
+        Route::patch(
+            '/student-documents/{documentId}/verify',
+            [StudentAcademicController::class, 'verifyStudentDocument']
+        );
+        Route::prefix('student-requests')->group(function () {
+            Route::get('/', [StudentRequestAdminController::class, 'index']);
+            Route::get('/{requestId}', [StudentRequestAdminController::class, 'show']);
+            Route::post('/{requestId}/decision', [StudentRequestAdminController::class, 'decide']);
+        });
+        Route::get('/bulk-course-registration/context', [StudentAcademicController::class, 'bulkCourseRegistrationContext']);
+        Route::get('/bulk-course-registration/preview', [StudentAcademicController::class, 'previewBulkCourseRegistration']);
+        Route::post('/bulk-course-registration/register', [StudentAcademicController::class, 'registerBulkCourses']);
+
+        Route::get('/course-registration-settings', [StudentAcademicController::class, 'courseRegistrationSettings']);
+        Route::post('/course-registration-settings', [StudentAcademicController::class, 'saveCourseRegistrationSettings']);
     });
-});
 
-Route::prefix('student-portal')->group(function () {
-    Route::get('/dashboard', [StudentPortalController::class, 'dashboard']);
-    Route::get('/profile', [StudentPortalController::class, 'profile']);
-    Route::get('/enrollment', [StudentPortalController::class, 'enrollment']);
-    Route::get('/courses', [StudentPortalController::class, 'courses']);
-    Route::get('/documents', [StudentPortalController::class, 'documents']);
+    Route::prefix('student-portal')->group(function () {
+        Route::get('/dashboard', [StudentPortalController::class, 'dashboard']);
+        Route::get('/profile', [StudentPortalController::class, 'profile']);
+        Route::get('/enrollment', [StudentPortalController::class, 'enrollment']);
+        Route::get('/courses', [StudentPortalController::class, 'courses']);
+        Route::get('/documents', [StudentPortalController::class, 'documents']);
 
-    Route::get('/requests', [StudentPortalController::class, 'requests']);
-    Route::post('/requests/profile-correction', [StudentPortalController::class, 'submitProfileCorrectionRequest']);
-    Route::post('/requests/document-resubmission', [StudentPortalController::class, 'submitDocumentResubmissionRequest']);
-    Route::post('/requests/course-add-drop', [StudentPortalController::class, 'submitCourseAddDropRequest']);
+        Route::get('/requests', [StudentPortalController::class, 'requests']);
+        Route::post('/requests/profile-correction', [StudentPortalController::class, 'submitProfileCorrectionRequest']);
+        Route::post('/requests/document-resubmission', [StudentPortalController::class, 'submitDocumentResubmissionRequest']);
+        Route::post('/requests/course-add-drop', [StudentPortalController::class, 'submitCourseAddDropRequest']);
 
-    Route::get('/available-courses', [StudentPortalController::class, 'availableCourses']);
+        Route::get('/available-courses', [StudentPortalController::class, 'availableCourses']);
 
-    Route::post('/profile-picture', [StudentPortalController::class, 'uploadProfilePicture']);
-    Route::get('/fee-status', [StudentPortalController::class, 'feeStatus']);
-    Route::post('/documents/upload', [StudentPortalController::class, 'uploadDocument']);
+        Route::post('/profile-picture', [StudentPortalController::class, 'uploadProfilePicture']);
+        Route::get('/fee-status', [StudentPortalController::class, 'feeStatus']);
+        Route::post('/documents/upload', [StudentPortalController::class, 'uploadDocument']);
 
-    Route::get('/research-publications', [StudentPortalController::class, 'researchPublications']);
-    Route::post('/research-publications', [StudentPortalController::class, 'storeResearchPublication']);
-    Route::delete('/research-publications/{publicationId}', [StudentPortalController::class, 'deleteResearchPublication']);
-});
+        Route::get('/research-publications', [StudentPortalController::class, 'researchPublications']);
+        Route::post('/research-publications', [StudentPortalController::class, 'storeResearchPublication']);
+        Route::delete('/research-publications/{publicationId}', [StudentPortalController::class, 'deleteResearchPublication']);
+        Route::get('/course-registration/settings', [StudentPortalController::class, 'courseRegistrationSettings']);
+        Route::get('/course-registration/available-courses', [StudentPortalController::class, 'selfRegistrationAvailableCourses']);
+        Route::post('/course-registration/submit', [StudentPortalController::class, 'submitSelfCourseRegistration']);
+        Route::get('/attendance', [StudentPortalController::class, 'attendance']);
+    });
     /*
     |--------------------------------------------------------------------------
     | Admission Admin / Testing APIs
@@ -365,23 +380,23 @@ Route::prefix('student-portal')->group(function () {
         Route::post('/evaluate-program', [ApplicantEligibilityController::class, 'evaluateProgram']);
         Route::get('/applicants/{applicantId}/eligible-programs', [ApplicantEligibilityController::class, 'eligiblePrograms']);
     });
-Route::prefix('admission/merit-builder')->group(function () {
-    Route::get('/source-catalog', [AdmissionMeritFormulaBuilderController::class, 'sourceCatalog']);
-    Route::get('/formulas', [AdmissionMeritFormulaBuilderController::class, 'index']);
-    Route::get('/formulas/{formulaId}', [AdmissionMeritFormulaBuilderController::class, 'show']);
-    
-    Route::post('/formulas', [AdmissionMeritFormulaBuilderController::class, 'storeFormula']);
-    Route::put('/formulas/{formulaId}', [AdmissionMeritFormulaBuilderController::class, 'updateFormula']);
-    Route::delete('/formulas/{formulaId}', [AdmissionMeritFormulaBuilderController::class, 'deleteFormula']);
+    Route::prefix('admission/merit-builder')->group(function () {
+        Route::get('/source-catalog', [AdmissionMeritFormulaBuilderController::class, 'sourceCatalog']);
+        Route::get('/formulas', [AdmissionMeritFormulaBuilderController::class, 'index']);
+        Route::get('/formulas/{formulaId}', [AdmissionMeritFormulaBuilderController::class, 'show']);
+        
+        Route::post('/formulas', [AdmissionMeritFormulaBuilderController::class, 'storeFormula']);
+        Route::put('/formulas/{formulaId}', [AdmissionMeritFormulaBuilderController::class, 'updateFormula']);
+        Route::delete('/formulas/{formulaId}', [AdmissionMeritFormulaBuilderController::class, 'deleteFormula']);
 
-    Route::post('/formulas/{formulaId}/components', [AdmissionMeritFormulaBuilderController::class, 'storeComponent']);
-    Route::put('/components/{componentId}', [AdmissionMeritFormulaBuilderController::class, 'updateComponent']);
-    Route::delete('/components/{componentId}', [AdmissionMeritFormulaBuilderController::class, 'deleteComponent']);
+        Route::post('/formulas/{formulaId}/components', [AdmissionMeritFormulaBuilderController::class, 'storeComponent']);
+        Route::put('/components/{componentId}', [AdmissionMeritFormulaBuilderController::class, 'updateComponent']);
+        Route::delete('/components/{componentId}', [AdmissionMeritFormulaBuilderController::class, 'deleteComponent']);
 
-    Route::post('/formulas/{formulaId}/applicabilities', [AdmissionMeritFormulaBuilderController::class, 'storeApplicability']);
-    Route::put('/applicabilities/{applicabilityId}', [AdmissionMeritFormulaBuilderController::class, 'updateApplicability']);
-    Route::delete('/applicabilities/{applicabilityId}', [AdmissionMeritFormulaBuilderController::class, 'deleteApplicability']);
-});
+        Route::post('/formulas/{formulaId}/applicabilities', [AdmissionMeritFormulaBuilderController::class, 'storeApplicability']);
+        Route::put('/applicabilities/{applicabilityId}', [AdmissionMeritFormulaBuilderController::class, 'updateApplicability']);
+        Route::delete('/applicabilities/{applicabilityId}', [AdmissionMeritFormulaBuilderController::class, 'deleteApplicability']);
+    });
     Route::prefix('admission/applicant-portal')->group(function () {
         Route::get('/applicants/{applicantId}/eligible-programs', [ApplicantPortalApplicationController::class, 'eligiblePrograms']);
         Route::get('/applicants/{applicantId}/applications', [ApplicantPortalApplicationController::class, 'applications']);
@@ -413,112 +428,112 @@ Route::prefix('admission/merit-builder')->group(function () {
         Route::get('/', [ApplicantProgressController::class, 'index']);
         Route::get('/{applicantId}', [ApplicantProgressController::class, 'show']);
     });
-Route::prefix('admission/merit-scores')->group(function () {
-    Route::get('/', [AdmissionApplicantMeritScoreAdminController::class, 'index']);
-    Route::get('/{scoreId}', [AdmissionApplicantMeritScoreAdminController::class, 'detail']);
-});
-Route::prefix('admission/merit-offers')->group(function () {
-    Route::post('/lists/{meritListId}/generate-offers', [AdmissionMeritOfferController::class, 'generateOffers']);
-    Route::get('/lists/{meritListId}/movements', [AdmissionMeritOfferController::class, 'movements']);
+    Route::prefix('admission/merit-scores')->group(function () {
+        Route::get('/', [AdmissionApplicantMeritScoreAdminController::class, 'index']);
+        Route::get('/{scoreId}', [AdmissionApplicantMeritScoreAdminController::class, 'detail']);
+    });
+    Route::prefix('admission/merit-offers')->group(function () {
+        Route::post('/lists/{meritListId}/generate-offers', [AdmissionMeritOfferController::class, 'generateOffers']);
+        Route::get('/lists/{meritListId}/movements', [AdmissionMeritOfferController::class, 'movements']);
 
-    Route::post('/applicants/{meritListApplicantId}/accept', [AdmissionMeritOfferController::class, 'accept']);
-    Route::post('/applicants/{meritListApplicantId}/reject', [AdmissionMeritOfferController::class, 'reject']);
-    Route::post('/applicants/{meritListApplicantId}/expire', [AdmissionMeritOfferController::class, 'expire']);
-});
-Route::prefix('assessment/questions')->group(function () {
-    Route::get('/', [QuestionEditorController::class, 'index']);
-    Route::get('/quality-dashboard', [QuestionEditorController::class, 'qualityDashboard']);
+        Route::post('/applicants/{meritListApplicantId}/accept', [AdmissionMeritOfferController::class, 'accept']);
+        Route::post('/applicants/{meritListApplicantId}/reject', [AdmissionMeritOfferController::class, 'reject']);
+        Route::post('/applicants/{meritListApplicantId}/expire', [AdmissionMeritOfferController::class, 'expire']);
+    });
+    Route::prefix('assessment/questions')->group(function () {
+        Route::get('/', [QuestionEditorController::class, 'index']);
+        Route::get('/quality-dashboard', [QuestionEditorController::class, 'qualityDashboard']);
 
-    Route::post('/', [QuestionEditorController::class, 'store']);
-    Route::post('/bulk-import', [QuestionEditorController::class, 'bulkImport']);
-    Route::post('/import-excel', [QuestionEditorController::class, 'importExcel']);
+        Route::post('/', [QuestionEditorController::class, 'store']);
+        Route::post('/bulk-import', [QuestionEditorController::class, 'bulkImport']);
+        Route::post('/import-excel', [QuestionEditorController::class, 'importExcel']);
 
-    Route::get('/{id}', [QuestionEditorController::class, 'show']);
-    Route::put('/{id}', [QuestionEditorController::class, 'update']);
-    Route::delete('/{id}', [QuestionEditorController::class, 'destroy']);
-});
-Route::prefix('admission/merit-lists')->group(function () {
-    Route::get('/', [AdmissionMeritListController::class, 'index']);
-    Route::post('/generate', [AdmissionMeritListController::class, 'generate']);
-    Route::get('/{meritListId}', [AdmissionMeritListController::class, 'show']);
-    Route::post('/{meritListId}/publish', [AdmissionMeritListController::class, 'publish']);
-    Route::post('/{meritListId}/cancel', [AdmissionMeritListController::class, 'cancel']);
-});
-Route::prefix('assessment/builder')->group(function () {
-    Route::get('/assessments/{assessmentId}', [AssessmentBuilderController::class, 'show']);
+        Route::get('/{id}', [QuestionEditorController::class, 'show']);
+        Route::put('/{id}', [QuestionEditorController::class, 'update']);
+        Route::delete('/{id}', [QuestionEditorController::class, 'destroy']);
+    });
+    Route::prefix('admission/merit-lists')->group(function () {
+        Route::get('/', [AdmissionMeritListController::class, 'index']);
+        Route::post('/generate', [AdmissionMeritListController::class, 'generate']);
+        Route::get('/{meritListId}', [AdmissionMeritListController::class, 'show']);
+        Route::post('/{meritListId}/publish', [AdmissionMeritListController::class, 'publish']);
+        Route::post('/{meritListId}/cancel', [AdmissionMeritListController::class, 'cancel']);
+    });
+    Route::prefix('assessment/builder')->group(function () {
+        Route::get('/assessments/{assessmentId}', [AssessmentBuilderController::class, 'show']);
 
-    Route::post('/assessments/{assessmentId}/sections', [AssessmentBuilderController::class, 'createSection']);
-    Route::put('/sections/{sectionId}', [AssessmentBuilderController::class, 'updateSection']);
-    Route::delete('/sections/{sectionId}', [AssessmentBuilderController::class, 'deleteSection']);
+        Route::post('/assessments/{assessmentId}/sections', [AssessmentBuilderController::class, 'createSection']);
+        Route::put('/sections/{sectionId}', [AssessmentBuilderController::class, 'updateSection']);
+        Route::delete('/sections/{sectionId}', [AssessmentBuilderController::class, 'deleteSection']);
 
-    Route::get('/questions/available', [AssessmentBuilderController::class, 'availableQuestions']);
-    Route::post('/sections/{sectionId}/bulk-assign-questions', [AssessmentBuilderController::class, 'bulkAssignQuestions']);
+        Route::get('/questions/available', [AssessmentBuilderController::class, 'availableQuestions']);
+        Route::post('/sections/{sectionId}/bulk-assign-questions', [AssessmentBuilderController::class, 'bulkAssignQuestions']);
 
-    Route::delete('/assessment-questions/{assessmentQuestionId}', [AssessmentBuilderController::class, 'removeAssessmentQuestion']);
-});
-Route::prefix('assessment/participants')->group(function () {
-    Route::get('/', [AssessmentParticipantController::class, 'index']);
-    Route::get('/candidates/applicants', [AssessmentParticipantController::class, 'candidates']);
-    Route::post('/bulk-assign-applicants', [AssessmentParticipantController::class, 'bulkAssignApplicants']);
-    Route::post('/generate-roll-numbers', [AssessmentParticipantController::class, 'generateRollNumbers']);
-    Route::get('/{participantId}/roll-no-slip', [AssessmentParticipantController::class, 'rollNoSlip']);
-});   
-Route::prefix('assessment/results')->group(function () {
-    Route::post('/attempts/{attemptId}/generate', [AssessmentResultController::class, 'generateForAttempt']);
-    Route::post('/{resultId}/approve', [AssessmentResultController::class, 'approve']);
-    Route::post('/{resultId}/publish', [AssessmentResultController::class, 'publish']);
-});
-Route::prefix('assessment/admission-sync')->group(function () {
-    Route::post('/results/{assessmentResultId}', [AssessmentAdmissionSyncController::class, 'syncResult']);
-});
-Route::prefix('assessment/admin/attempts')->group(function () {
-    Route::get('/', [AssessmentAttemptAdminController::class, 'index']);
-    Route::get('/{attemptId}', [AssessmentAttemptAdminController::class, 'detail']);
+        Route::delete('/assessment-questions/{assessmentQuestionId}', [AssessmentBuilderController::class, 'removeAssessmentQuestion']);
+    });
+    Route::prefix('assessment/participants')->group(function () {
+        Route::get('/', [AssessmentParticipantController::class, 'index']);
+        Route::get('/candidates/applicants', [AssessmentParticipantController::class, 'candidates']);
+        Route::post('/bulk-assign-applicants', [AssessmentParticipantController::class, 'bulkAssignApplicants']);
+        Route::post('/generate-roll-numbers', [AssessmentParticipantController::class, 'generateRollNumbers']);
+        Route::get('/{participantId}/roll-no-slip', [AssessmentParticipantController::class, 'rollNoSlip']);
+    });   
+    Route::prefix('assessment/results')->group(function () {
+        Route::post('/attempts/{attemptId}/generate', [AssessmentResultController::class, 'generateForAttempt']);
+        Route::post('/{resultId}/approve', [AssessmentResultController::class, 'approve']);
+        Route::post('/{resultId}/publish', [AssessmentResultController::class, 'publish']);
+    });
+    Route::prefix('assessment/admission-sync')->group(function () {
+        Route::post('/results/{assessmentResultId}', [AssessmentAdmissionSyncController::class, 'syncResult']);
+    });
+    Route::prefix('assessment/admin/attempts')->group(function () {
+        Route::get('/', [AssessmentAttemptAdminController::class, 'index']);
+        Route::get('/{attemptId}', [AssessmentAttemptAdminController::class, 'detail']);
+        Route::get(
+        '/assessment/admin/attempts/{attemptId}/activity-logs',
+        [AssessmentAttemptAdminController::class, 'activityLogs']
+    );
+    });
+    Route::prefix('assessment/admin/results')->group(function () {
+        Route::get('/', [AssessmentResultAdminController::class, 'index']);
+        Route::get('/{resultId}', [AssessmentResultAdminController::class, 'detail']);
+        Route::post('/{resultId}/approve', [AssessmentResultAdminController::class, 'approve']);
+        Route::post('/{resultId}/publish', [AssessmentResultAdminController::class, 'publish']);
+        Route::post('/{resultId}/sync-to-admission', [AssessmentResultAdminController::class, 'syncToAdmission']);
+    });
+    Route::get('/assessment/admin/analytics', [AssessmentAnalyticsController::class, 'dashboard']);
+    Route::post('/assessment/admin/schedules/preview', [AssessmentScheduleUtilityController::class, 'preview']);
+    Route::prefix('assessment/admin/manual-marking')->group(function () {
+        Route::get('/pending', [AssessmentManualMarkingController::class, 'pending']);
+        Route::post('/answers/{answerId}/mark', [AssessmentManualMarkingController::class, 'mark']);
+    });
+    Route::prefix('admission/merit-calculation')->group(function () {
+        Route::post('/calculate-applicant', [AdmissionMeritCalculationController::class, 'calculateForApplicant']);
+        Route::post('/bulk-calculate', [AdmissionMeritCalculationController::class, 'bulkCalculate']);
+    });
+    Route::prefix('admission/closure-reports')->group(function () {
+        Route::get('/admitted-candidates', [AdmissionClosureReportController::class, 'admittedCandidates']);
+        Route::get('/seat-summary', [AdmissionClosureReportController::class, 'seatSummary']);
+    });
+
+    Route::post(
+        '/admission/confirmations/{confirmationId}/transfer-student',
+        [AdmissionConfirmationController::class, 'transferConfirmedApplicant']
+    );
+    Route::post(
+        '/admission/confirmations/{confirmationId}/finalize',
+        [AdmissionFinalizationController::class, 'finalize']
+    );
+    Route::get('/applicant/edit-locks/me', [ApplicantEditLockController::class, 'me']);
+    Route::get('/admission/applicants/{applicantId}/edit-locks', [ApplicantEditLockController::class, 'show']);
     Route::get(
-    '/assessment/admin/attempts/{attemptId}/activity-logs',
-    [AssessmentAttemptAdminController::class, 'activityLogs']
-);
-});
-Route::prefix('assessment/admin/results')->group(function () {
-    Route::get('/', [AssessmentResultAdminController::class, 'index']);
-    Route::get('/{resultId}', [AssessmentResultAdminController::class, 'detail']);
-    Route::post('/{resultId}/approve', [AssessmentResultAdminController::class, 'approve']);
-    Route::post('/{resultId}/publish', [AssessmentResultAdminController::class, 'publish']);
-    Route::post('/{resultId}/sync-to-admission', [AssessmentResultAdminController::class, 'syncToAdmission']);
-});
-Route::get('/assessment/admin/analytics', [AssessmentAnalyticsController::class, 'dashboard']);
-Route::post('/assessment/admin/schedules/preview', [AssessmentScheduleUtilityController::class, 'preview']);
-Route::prefix('assessment/admin/manual-marking')->group(function () {
-    Route::get('/pending', [AssessmentManualMarkingController::class, 'pending']);
-    Route::post('/answers/{answerId}/mark', [AssessmentManualMarkingController::class, 'mark']);
-});
-Route::prefix('admission/merit-calculation')->group(function () {
-    Route::post('/calculate-applicant', [AdmissionMeritCalculationController::class, 'calculateForApplicant']);
-    Route::post('/bulk-calculate', [AdmissionMeritCalculationController::class, 'bulkCalculate']);
-});
-Route::prefix('admission/closure-reports')->group(function () {
-    Route::get('/admitted-candidates', [AdmissionClosureReportController::class, 'admittedCandidates']);
-    Route::get('/seat-summary', [AdmissionClosureReportController::class, 'seatSummary']);
-});
-
-Route::post(
-    '/admission/confirmations/{confirmationId}/transfer-student',
-    [AdmissionConfirmationController::class, 'transferConfirmedApplicant']
-);
-Route::post(
-    '/admission/confirmations/{confirmationId}/finalize',
-    [AdmissionFinalizationController::class, 'finalize']
-);
-Route::get('/applicant/edit-locks/me', [ApplicantEditLockController::class, 'me']);
-Route::get('/admission/applicants/{applicantId}/edit-locks', [ApplicantEditLockController::class, 'show']);
-Route::get(
-    '/admission/applicants/{applicantId}/edit-locks',
-    [ApplicantEditLockController::class, 'show']
-);
-Route::post(
-    '/assessment/questions/suggest-metadata',
-    [QuestionEditorController::class, 'suggestMetadata']
-);
+        '/admission/applicants/{applicantId}/edit-locks',
+        [ApplicantEditLockController::class, 'show']
+    );
+    Route::post(
+        '/assessment/questions/suggest-metadata',
+        [QuestionEditorController::class, 'suggestMetadata']
+    );
     /*
     |--------------------------------------------------------------------------
     | Dynamic Options
@@ -637,7 +652,28 @@ Route::post(
         Route::post('/{module}/enable', [ModuleController::class, 'enableTenantModule']);
         Route::post('/{module}/disable', [ModuleController::class, 'disableTenantModule']);
     });
+    /*
+    |--------------------------------------------------------------------------
+    | Attendance Management
+    |--------------------------------------------------------------------------
+    */
 
+    Route::prefix('attendance')->group(function () {
+        Route::get('/sessions', [AttendanceSessionController::class, 'index']);
+        Route::get('/sessions/{session}', [AttendanceSessionController::class, 'show']);
+        Route::delete('/sessions/{session}', [AttendanceSessionController::class, 'destroy']);
+
+        Route::get('/marking/context', [AttendanceMarkingController::class, 'context']);
+        Route::get('/marking/students', [AttendanceMarkingController::class, 'students']);
+        Route::post('/marking/save', [AttendanceMarkingController::class, 'save']);
+        Route::post('/sessions/{session}/lock', [AttendanceMarkingController::class, 'lock']);
+
+        Route::get('/reports/summary', [AttendanceReportController::class, 'summary']);
+        Route::get('/reports/student-course-percentages', [AttendanceReportController::class, 'studentCoursePercentages']);
+        Route::get('/reports/defaulters', [AttendanceReportController::class, 'defaulters']);
+    });
+
+    
     /*
     |--------------------------------------------------------------------------
     | RBAC
@@ -647,9 +683,75 @@ Route::post(
     Route::prefix('rbac')->group(function () {
         Route::get('/permissions', [PermissionController::class, 'index']);
         Route::get('/permissions/grouped', [PermissionController::class, 'grouped']);
+        Route::post('/permissions/generate', [PermissionController::class, 'generate']);
         Route::get('/roles/options', [RoleController::class, 'options']);
         Route::post('/roles/{role}/assign-permissions', [RoleController::class, 'assignPermissions']);
         Route::apiResource('roles', RoleController::class);
         Route::post('/users/{user}/assign-roles', [UserRoleController::class, 'assignRoles']);
+    });
+
+    /*
+    |--------------------------------------------------------------------------
+    | Dashboard Summary
+    |--------------------------------------------------------------------------
+    */
+
+    Route::get('/dashboard/summary', function (\Illuminate\Http\Request $request) {
+        $user = $request->user();
+
+        $isSuperAdmin = $user && method_exists($user, 'isSuperAdmin') && $user->isSuperAdmin();
+        $tenantId = $user?->tenant_id;
+
+        if ($isSuperAdmin) {
+            return response()->json([
+                'data' => [
+                    'scope' => 'platform',
+                    'tenants' => \Illuminate\Support\Facades\Schema::hasTable('tenants')
+                        ? \Illuminate\Support\Facades\DB::table('tenants')->count()
+                        : 0,
+                    'active_tenants' => \Illuminate\Support\Facades\Schema::hasTable('tenants')
+                        ? \Illuminate\Support\Facades\DB::table('tenants')->where('status', 'active')->count()
+                        : 0,
+                    'users' => \Illuminate\Support\Facades\Schema::hasTable('users')
+                        ? \Illuminate\Support\Facades\DB::table('users')->count()
+                        : 0,
+                    'modules' => \Illuminate\Support\Facades\Schema::hasTable('modules')
+                        ? \Illuminate\Support\Facades\DB::table('modules')->count()
+                        : 0,
+                    'login_logs' => \Illuminate\Support\Facades\Schema::hasTable('login_logs')
+                        ? \Illuminate\Support\Facades\DB::table('login_logs')->count()
+                        : 0,
+                    'audit_logs' => \Illuminate\Support\Facades\Schema::hasTable('audit_logs')
+                        ? \Illuminate\Support\Facades\DB::table('audit_logs')->count()
+                        : 0,
+                ],
+                'message' => 'Dashboard summary fetched successfully.',
+            ]);
+        }
+
+        return response()->json([
+            'data' => [
+                'scope' => 'tenant',
+                'students' => \Illuminate\Support\Facades\Schema::hasTable('students')
+                    ? \Illuminate\Support\Facades\DB::table('students')->where('tenant_id', $tenantId)->count()
+                    : 0,
+                'applicants' => \Illuminate\Support\Facades\Schema::hasTable('applicants')
+                    ? \Illuminate\Support\Facades\DB::table('applicants')->where('tenant_id', $tenantId)->count()
+                    : 0,
+                'programs' => \Illuminate\Support\Facades\Schema::hasTable('programs')
+                    ? \Illuminate\Support\Facades\DB::table('programs')->where('tenant_id', $tenantId)->count()
+                    : 0,
+                'enrollments' => \Illuminate\Support\Facades\Schema::hasTable('student_enrollments')
+                    ? \Illuminate\Support\Facades\DB::table('student_enrollments')->where('tenant_id', $tenantId)->count()
+                    : 0,
+                'course_registrations' => \Illuminate\Support\Facades\Schema::hasTable('student_course_registrations')
+                    ? \Illuminate\Support\Facades\DB::table('student_course_registrations')->where('tenant_id', $tenantId)->count()
+                    : 0,
+                'users' => \Illuminate\Support\Facades\Schema::hasTable('users')
+                    ? \Illuminate\Support\Facades\DB::table('users')->where('tenant_id', $tenantId)->count()
+                    : 0,
+            ],
+            'message' => 'Dashboard summary fetched successfully.',
+        ]);
     });
 });

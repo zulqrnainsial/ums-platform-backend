@@ -49,7 +49,19 @@ class MenuController extends Controller
             'Menu options fetched successfully.'
         );
     }
+public function nextDisplayOrder(Request $request): JsonResponse
+{
+    $parentId = $request->filled('parent_id')
+        ? (int) $request->query('parent_id')
+        : null;
 
+    return ApiResponse::success(
+        [
+            'display_order' => $this->menuService->nextDisplayOrder($parentId),
+        ],
+        'Next display order fetched successfully.'
+    );
+}
     public function tree(): JsonResponse
     {
         return ApiResponse::success(

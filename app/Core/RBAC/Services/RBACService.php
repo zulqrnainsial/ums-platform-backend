@@ -73,7 +73,44 @@ class RBACService
         ->orderBy('name')
         ->get();
 }
+public function generatePermissions(array $data): array
+{
+    $module = str($data['module'])
+        ->lower()
+        ->replace([' ', '-'], '_')
+        ->toString();
 
+    $resource = str($data['resource'])
+        ->lower()
+        ->replace([' ', '-'], '_')
+        ->toString();
+
+    $actions = collect($data['actions'] ?? [])
+        ->filter()
+        ->map(fn ($action) => str($action)->lower()->replace([' ', '-'], '_')->toString())
+        ->unique()
+        ->values();
+
+    abort_if($actions->isEmpty(), 422, 'At least one action is required.');
+
+    $created = [];
+
+    foreach ($actions as $action) {
+        $name = "{$module}.{$resource}.{$action}";
+
+        $permission = Permission::findOrCreate($name, 'web');
+
+        $created[] = [
+            'id' => $permission->id,
+            'name' => $permission->name,
+            'guard_name' => $permission->guard_name,
+        ];
+    }
+
+    app(\Spatie\Permission\PermissionRegistrar::class)->forgetCachedPermissions();
+
+    return $created;
+}
     public function allPermissionsGrouped(?User $user = null): array
     {
         $query = Permission::query()

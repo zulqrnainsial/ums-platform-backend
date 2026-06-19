@@ -141,6 +141,14 @@ public function lookups(Request $request, string $categoryCode): \Illuminate\Htt
     $category = \App\Modules\Lookup\Models\LookupCategory::query()
         ->where('code', $categoryCode)
         ->where('status', 'active')
+        ->where(function ($q) use ($tenantId) {
+            $q->whereNull('tenant_id');
+
+            if ($tenantId) {
+                $q->orWhere('tenant_id', $tenantId);
+            }
+        })
+        ->orderByRaw('tenant_id IS NULL')
         ->first();
 
     if (!$category) {
@@ -246,21 +254,33 @@ public function lookupValues(Request $request): JsonResponse
     }
 
     private function applyTenantScope(Builder $query, string $table): void
-    {
-        if (!auth()->check()) {
-            return;
-        }
-
-        $tenantId = auth()->user()->tenant_id;
-
-        if (!$tenantId) {
-            return;
-        }
-
-        if (Schema::hasColumn($table, 'tenant_id')) {
-            $query->where('tenant_id', $tenantId);
-        }
+{
+    if (!auth()->check()) {
+        return;
     }
+
+    $user = auth()->user();
+    $tenantId = $user?->tenant_id;
+
+    if (!$tenantId) {
+        return;
+    }
+
+    if (!Schema::hasColumn($table, 'tenant_id')) {
+        return;
+    }
+
+    if (in_array($table, ['lookup_categories', 'lookup_values'], true)) {
+        $query->where(function ($q) use ($tenantId) {
+            $q->whereNull('tenant_id')
+                ->orWhere('tenant_id', $tenantId);
+        });
+
+        return;
+    }
+
+    $query->where('tenant_id', $tenantId);
+}
 public function admissionSessions(Request $request): JsonResponse
 {
     return $this->options($request, AdmissionSession::class);

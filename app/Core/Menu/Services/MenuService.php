@@ -5,7 +5,7 @@ namespace App\Core\Menu\Services;
 use App\Core\Menu\Models\Menu;
 use App\Models\User;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
-use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -48,14 +48,40 @@ class MenuService
     }
 
     public function options(): Collection
-    {
-        return Menu::query()
-            ->where('is_active', true)
-            ->orderBy('display_order')
-            ->orderBy('title')
-            ->get();
-    }
+{
+    $menus = Menu::query()
+        ->where('is_active', true)
+        ->orderBy('display_order')
+        ->orderBy('title')
+        ->get();
 
+    $children = $menus->groupBy(fn ($menu) => $menu->parent_id ?: 0);
+
+    $build = function ($parentId = 0, string $prefix = '') use (&$build, $children) {
+        return ($children[$parentId] ?? collect())
+            ->flatMap(function ($menu) use (&$build, $prefix) {
+                return collect([
+                    (object) [
+                        'id' => $menu->id,
+                        'title' => $prefix . $menu->title,
+                        'code' => $menu->code,
+                        'parent_id' => $menu->parent_id,
+                        'display_order' => $menu->display_order,
+                    ],
+                ])->merge(
+                    $build($menu->id, $prefix . '— ')
+                );
+            });
+    };
+
+    return $build()->values();
+}
+public function nextDisplayOrder(?int $parentId = null): int
+{
+    return ((int) Menu::query()
+        ->where('parent_id', $parentId)
+        ->max('display_order')) + 1;
+}
     public function tree(?User $user = null): array
     {
         $query = Menu::query()

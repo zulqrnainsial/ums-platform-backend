@@ -28,7 +28,20 @@ class PermissionController extends Controller
             'Permissions fetched successfully.'
         );
     }
+public function generate(Request $request): JsonResponse
+{
+    $validated = $request->validate([
+        'module' => ['required', 'string', 'max:100'],
+        'resource' => ['required', 'string', 'max:150'],
+        'actions' => ['required', 'array', 'min:1'],
+        'actions.*' => ['required', 'string', 'max:80'],
+    ]);
 
+    return ApiResponse::success(
+        $this->rbacService->generatePermissions($validated),
+        'Permissions generated successfully.'
+    );
+}
     public function grouped(Request $request): JsonResponse
     {
         return ApiResponse::success(

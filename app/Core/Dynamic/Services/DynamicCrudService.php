@@ -114,7 +114,9 @@ private function applyEntitySpecificScopes($query, DynamicEntity $entity): void
         $data = $this->sanitizeData($entity, $data);
         $data = $this->applyCurriculumSubjectDefaults($entity, $data);
         $this->validateData($entity, $data);
-
+        if ($entity->entity_code === 'tenants') {
+            return app(\App\Core\Tenant\Services\TenantService::class)->create($data);
+        }
         return DB::transaction(function () use ($modelClass, $entity, $data) {
             if ($entity->is_tenant_scoped && auth()->check() && auth()->user()->tenant_id) {
                 if (Schema::hasColumn($entity->table_name, 'tenant_id')) {

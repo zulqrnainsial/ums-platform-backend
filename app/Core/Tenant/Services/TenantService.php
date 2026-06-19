@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\DB;
 use App\Models\User;
 use Illuminate\Support\Facades\Hash;
 use Spatie\Permission\Models\Role;
+use Illuminate\Support\Facades\Schema;
 class TenantService
 {
     public function paginate(array $filters = []): LengthAwarePaginator
@@ -65,6 +66,10 @@ class TenantService
                 $data['module_ids']
             );
 
+            $data = collect($data)
+                ->filter(fn ($value, $column) => Schema::hasColumn('tenants', $column))
+                ->toArray();
+
             $tenant = Tenant::create($data);
 
             $this->assignCoreModules($tenant);
@@ -94,41 +99,34 @@ class TenantService
             return $tenant->refresh();
         });
     }
-private function createTenantAdminUser(
-    Tenant $tenant,
-    string $adminName,
-    string $adminEmail,
-    string $adminPassword
-): User {
-    $existingUser = User::query()
-        ->where('tenant_id', $tenant->id)
-        ->where('email', $adminEmail)
-        ->first();
+    private function createTenantAdminUser(
+        Tenant $tenant,
+        string $adminName,
+        string $adminEmail,
+        string $adminPassword
+    ): User {
+        $existingUser = User::query()
+            ->where('tenant_id', $tenant->id)
+            ->where('email', $adminEmail)
+            ->first();
 
-    if ($existingUser) {
-        return $existingUser;
-    }
+        if ($existingUser) {
+            return $existingUser;
+        }
 
-    $user = User::create([
-        'tenant_id' => $tenant->id,
-        'name' => $adminName,
-        'email' => $adminEmail,
-        'password' => Hash::make($adminPassword),
-        'user_type' => 'tenant_admin',
-        'status' => 'active',
-    ]);
+        $user = User::create([
+            'tenant_id' => $tenant->id,
+            'name' => $adminName,
+            'email' => $adminEmail,
+            'password' => Hash::make($adminPassword),
+            'user_type' => 'tenant_admin',
+            'status' => 'active',
+        ]);
 
-    $tenantAdminRole = Role::query()
-        ->where('name', 'Tenant Admin')
-        ->where('guard_name', 'web')
-        ->first();
-
-    if ($tenantAdminRole) {
+        $tenantAdminRole = Role::findOrCreate('Tenant Admin', 'web');
         $user->assignRole($tenantAdminRole);
+        return $user;
     }
-
-    return $user;
-}
     public function delete(Tenant $tenant): bool
     {
         return DB::transaction(function () use ($tenant) {
@@ -176,7 +174,7 @@ private function createTenantAdminUser(
                 ];
             }
 
-            $tenant->modules()->sync($syncData);
+            $tenant->modules()->syncWithoutDetaching($syncData);
 
             return $tenant->load('modules');
         });

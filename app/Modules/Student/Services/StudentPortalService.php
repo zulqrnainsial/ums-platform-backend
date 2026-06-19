@@ -196,7 +196,300 @@ public function availableCourses(): array
         ->values()
         ->toArray();
 }
+public function courseRegistrationSettings(): array
+{
+    $student = $this->currentStudent();
+    $enrollment = $this->currentEnrollment((int) $student->id);
 
+    if (!$enrollment || !Schema::hasTable('course_registration_settings')) {
+        return [
+            'student_self_registration_enabled' => false,
+            'requires_admin_approval' => true,
+            'allow_add_drop' => false,
+            'window_open' => false,
+        ];
+    }
+
+    $query = DB::table('course_registration_settings')
+        ->where('tenant_id', $student->tenant_id)
+        ->where('academic_session_id', $enrollment->academic_session_id)
+        ->where('status_code', 'active')
+        ->where(function ($q) use ($enrollment) {
+            $q->where('program_id', $enrollment->program_id)
+                ->orWhereNull('program_id');
+        });
+
+    $setting = $query
+        ->orderByRaw('program_id IS NULL')
+        ->orderByDesc('id')
+        ->first();
+
+    if (!$setting) {
+        return [
+            'student_self_registration_enabled' => false,
+            'requires_admin_approval' => true,
+            'allow_add_drop' => false,
+            'window_open' => false,
+        ];
+    }
+
+    $now = now();
+
+    $windowOpen = (bool) $setting->student_self_registration_enabled;
+
+    if ($setting->registration_start_at && $now->lt($setting->registration_start_at)) {
+        $windowOpen = false;
+    }
+
+    if ($setting->registration_end_at && $now->gt($setting->registration_end_at)) {
+        $windowOpen = false;
+    }
+
+    return array_merge((array) $setting, [
+        'window_open' => $windowOpen,
+    ]);
+}
+public function attendance(array $filters = []): array
+{
+    $student = $this->currentStudent();
+
+    if (!Schema::hasTable('attendance_records')) {
+        return [
+            'summary' => [
+                'total' => 0,
+                'present' => 0,
+                'absent' => 0,
+                'late' => 0,
+                'leave' => 0,
+                'percentage' => 0,
+            ],
+            'records' => [],
+        ];
+    }
+
+    $query = DB::table('attendance_records as ar')
+        ->join('attendance_sessions as ats', 'ats.id', '=', 'ar.attendance_session_id')
+        ->where('ar.tenant_id', $student->tenant_id)
+        ->where('ar.student_id', $student->id)
+        ->whereNull('ats.deleted_at');
+
+    if (!empty($filters['academic_session_id'])) {
+        $query->where('ats.academic_session_id', $filters['academic_session_id']);
+    }
+
+    if (!empty($filters['academic_term_id'])) {
+        $query->where('ats.academic_term_id', $filters['academic_term_id']);
+    }
+
+    if (!empty($filters['curriculum_subject_id'])) {
+        $query->where('ats.curriculum_subject_id', $filters['curriculum_subject_id']);
+    }
+
+    $records = $query
+        ->select([
+            'ar.id',
+            'ar.status_code',
+            'ar.marked_at',
+            'ar.remarks',
+            'ats.attendance_date',
+            'ats.session_type',
+            'ats.course_code',
+            'ats.course_title',
+            'ats.topic',
+            'ats.status_code as session_status',
+        ])
+        ->orderByDesc('ats.attendance_date')
+        ->orderByDesc('ar.id')
+        ->get()
+        ->map(fn ($row) => (array) $row)
+        ->values()
+        ->toArray();
+
+    $total = count($records);
+    $present = collect($records)->where('status_code', 'present')->count();
+    $late = collect($records)->where('status_code', 'late')->count();
+    $leave = collect($records)->whereIn('status_code', ['leave', 'excused'])->count();
+    $absent = collect($records)->where('status_code', 'absent')->count();
+
+    $attended = $present + $late + $leave;
+
+    return [
+        'summary' => [
+            'total' => $total,
+            'present' => $present,
+            'absent' => $absent,
+            'late' => $late,
+            'leave' => $leave,
+            'percentage' => $total > 0 ? round(($attended / $total) * 100, 2) : 0,
+        ],
+        'records' => $records,
+    ];
+}
+public function selfRegistrationAvailableCourses(array $filters = []): array
+{
+    $student = $this->currentStudent();
+    $enrollment = $this->currentEnrollment((int) $student->id);
+    $settings = $this->courseRegistrationSettings();
+
+    abort_if(!$enrollment, 404, 'Current enrollment not found.');
+    abort_if(empty($settings['student_self_registration_enabled']), 403, 'Student self course registration is not enabled.');
+    abort_if(empty($settings['window_open']), 403, 'Course registration window is closed.');
+
+    $query = DB::table('curriculum_subjects as cs')
+        ->where('cs.tenant_id', $student->tenant_id)
+        ->where('cs.program_id', $enrollment->program_id)
+        ->where('cs.status', 'active')
+        ->whereNull('cs.deleted_at');
+
+    if (!empty($filters['academic_term_id'])) {
+        $query->where('cs.academic_term_id', $filters['academic_term_id']);
+    } elseif (!empty($settings['academic_term_id'])) {
+        $query->where('cs.academic_term_id', $settings['academic_term_id']);
+    }
+
+    if (!empty($filters['term_number'])) {
+        $query->where('cs.term_number', $filters['term_number']);
+    }
+
+    $registeredSubjectIds = DB::table('student_course_registrations')
+        ->where('tenant_id', $student->tenant_id)
+        ->where('student_enrollment_id', $enrollment->id)
+        ->whereIn('status', ['pending', 'registered', 'approved', 'completed'])
+        ->pluck('curriculum_subject_id')
+        ->filter()
+        ->values()
+        ->toArray();
+
+    return $query
+        ->select([
+            'cs.id as curriculum_subject_id',
+            'cs.subject_id',
+            'cs.subject_code as course_code',
+            'cs.subject_name as course_title',
+            'cs.subject_nature as subject_type_code',
+            'cs.term_number as term_no',
+            'cs.credit_hours',
+            'cs.is_compulsory',
+            'cs.is_credit_subject',
+        ])
+        ->orderBy('cs.term_number')
+        ->orderBy('cs.display_order')
+        ->orderBy('cs.subject_code')
+        ->get()
+        ->map(fn ($row) => [
+            'curriculum_subject_id' => $row->curriculum_subject_id,
+            'subject_id' => $row->subject_id ?? null,
+            'course_code' => $row->course_code,
+            'course_title' => $row->course_title,
+            'subject_type_code' => $row->subject_type_code,
+            'term_no' => $row->term_no,
+            'credit_hours' => $row->credit_hours,
+            'is_compulsory' => (bool) $row->is_compulsory,
+            'is_credit_subject' => (bool) $row->is_credit_subject,
+            'already_registered' => in_array($row->curriculum_subject_id, $registeredSubjectIds, true),
+        ])
+        ->values()
+        ->toArray();
+}
+
+public function submitSelfCourseRegistration(array $data): array
+{
+    $student = $this->currentStudent();
+    $enrollment = $this->currentEnrollment((int) $student->id);
+    $settings = $this->courseRegistrationSettings();
+
+    abort_if(!$enrollment, 404, 'Current enrollment not found.');
+    abort_if(empty($settings['student_self_registration_enabled']), 403, 'Student self course registration is not enabled.');
+    abort_if(empty($settings['window_open']), 403, 'Course registration window is closed.');
+
+    $status = !empty($settings['requires_admin_approval'])
+        ? 'pending'
+        : 'registered';
+
+    $created = [];
+    $skipped = [];
+
+    DB::transaction(function () use ($student, $enrollment, $data, $status, &$created, &$skipped) {
+        $subjects = DB::table('curriculum_subjects')
+            ->where('tenant_id', $student->tenant_id)
+            ->where('program_id', $enrollment->program_id)
+            ->whereIn('id', $data['curriculum_subject_ids'])
+            ->where('status', 'active')
+            ->whereNull('deleted_at')
+            ->get();
+
+        foreach ($subjects as $subject) {
+            $exists = DB::table('student_course_registrations')
+                ->where('tenant_id', $student->tenant_id)
+                ->where('student_enrollment_id', $enrollment->id)
+                ->where('curriculum_subject_id', $subject->id)
+                ->whereIn('status', ['pending', 'registered', 'approved', 'completed'])
+                ->first();
+
+            if ($exists) {
+                $skipped[] = [
+                    'curriculum_subject_id' => $subject->id,
+                    'message' => 'Already registered or pending.',
+                ];
+                continue;
+            }
+
+            $payload = [
+                'tenant_id' => $student->tenant_id,
+                'student_id' => $student->id,
+                'student_enrollment_id' => $enrollment->id,
+
+                'program_id' => $enrollment->program_id,
+                'academic_session_id' => $enrollment->academic_session_id,
+                'academic_term_id' => $subject->academic_term_id ?? null,
+
+                'student_batch_id' => $enrollment->student_batch_id ?? null,
+                'section' => $enrollment->section ?? null,
+
+                'curriculum_id' => $subject->curriculum_id ?? null,
+                'curriculum_subject_id' => $subject->id,
+                'subject_id' => $subject->subject_id ?? null,
+
+                'course_code' => $subject->subject_code ?? null,
+                'course_title' => $subject->subject_name ?? null,
+                'credit_hours' => $subject->credit_hours ?? 0,
+                'subject_type_code' => $subject->subject_nature ?? null,
+
+                'registration_type' => 'regular',
+                'registration_source' => 'student_self',
+                'status' => $status,
+                'is_locked' => false,
+                'registered_at' => now(),
+
+                'requested_by' => auth()->id(),
+                'approved_by' => $status === 'registered' ? auth()->id() : null,
+                'approved_at' => $status === 'registered' ? now() : null,
+
+                'remarks' => $data['remarks'] ?? null,
+                'created_by' => auth()->id(),
+                'updated_by' => auth()->id(),
+                'created_at' => now(),
+                'updated_at' => now(),
+            ];
+
+            $payload = collect($payload)
+                ->filter(fn ($value, $column) => Schema::hasColumn('student_course_registrations', $column))
+                ->toArray();
+
+            $id = DB::table('student_course_registrations')->insertGetId($payload);
+
+            $created[] = array_merge(['id' => $id], $payload);
+        }
+    });
+
+    return [
+        'status' => $status,
+        'created_count' => count($created),
+        'skipped_count' => count($skipped),
+        'created' => $created,
+        'skipped' => $skipped,
+    ];
+}
 private function currentEnrollmentId(int $studentId): ?int
 {
     if (!Schema::hasTable('student_enrollments')) {

@@ -365,6 +365,15 @@ class MenuSeeder extends Seeder
             'display_order' => 2,
         ],
         [
+            'title' => 'Bulk Course Registration',
+            'code' => 'bulk_course_registration',
+            'route' => '/student-management/bulk-course-registration',
+            'icon' => 'UserOutlined',
+            'permission_name' => 'student.course-registration.bulk',
+            'module_code' => 'student',
+            'display_order' => 2.12,
+        ],
+        [
             'title' => 'Enrollments',
             'code' => 'student_academic_enrollments',
             'route' => '/student-management/enrollments',
@@ -493,6 +502,15 @@ class MenuSeeder extends Seeder
                         'permission_name' => 'student.portal.courses.view',
                         'module_code' => 'student',
                         'display_order' => 4,
+                    ],
+                    [
+                        'title' => 'Course Registration',
+                        'code' => 'course_registration',
+                        'route' => '/student-portal/course-registration',
+                        'icon' => 'BookOutlined',
+                        'permission_name' => 'student.portal.course-registration',
+                        'module_code' => 'student',
+                        'display_order' => 4.1,
                     ],
                     [
                         'title' => 'My Documents',

@@ -120,7 +120,102 @@ public function registerCourses(
         'Courses registered successfully.'
     );
 }
+public function bulkCourseRegistrationContext(
+    Request $request,
+    StudentAcademicService $service
+): JsonResponse {
+    return ApiResponse::success(
+        $service->bulkCourseRegistrationContext($request->all()),
+        'Bulk course registration context fetched successfully.'
+    );
+}
 
+public function previewBulkCourseRegistration(
+    Request $request,
+    StudentAcademicService $service
+): JsonResponse {
+    $validated = $request->validate([
+        'academic_session_id' => ['required', 'integer'],
+        'program_id' => ['required', 'integer'],
+        'academic_term_id' => ['nullable', 'integer'],
+        'term_number' => ['nullable', 'integer'],
+        'student_batch_id' => ['nullable', 'integer'],
+        'section_id' => ['nullable', 'integer'],
+    ]);
+
+    return ApiResponse::success(
+        $service->previewBulkCourseRegistration($validated),
+        'Bulk course registration preview fetched successfully.'
+    );
+}
+
+public function registerBulkCourses(
+    Request $request,
+    StudentAcademicService $service
+): JsonResponse {
+    $validated = $request->validate([
+        'academic_session_id' => ['required', 'integer'],
+        'program_id' => ['required', 'integer'],
+        'academic_term_id' => ['nullable', 'integer'],
+        'term_number' => ['nullable', 'integer'],
+
+        'student_batch_id' => ['nullable', 'integer'],
+        'section_id' => ['nullable', 'integer'],
+
+        'student_enrollment_ids' => ['required', 'array', 'min:1'],
+        'student_enrollment_ids.*' => ['integer'],
+
+        'curriculum_subject_ids' => ['required', 'array', 'min:1'],
+        'curriculum_subject_ids.*' => ['integer'],
+
+        'registration_type' => ['nullable', 'string', 'max:50'],
+        'remarks' => ['nullable', 'string', 'max:1000'],
+    ]);
+
+    return ApiResponse::success(
+        $service->registerBulkCourses($validated),
+        'Bulk courses registered successfully.'
+    );
+}
+
+public function courseRegistrationSettings(
+    Request $request,
+    StudentAcademicService $service
+): JsonResponse {
+    return ApiResponse::success(
+        $service->courseRegistrationSettings($request->all()),
+        'Course registration settings fetched successfully.'
+    );
+}
+
+public function saveCourseRegistrationSettings(
+    Request $request,
+    StudentAcademicService $service
+): JsonResponse {
+    $validated = $request->validate([
+        'academic_session_id' => ['required', 'integer'],
+        'program_id' => ['nullable', 'integer'],
+        'academic_term_id' => ['nullable', 'integer'],
+
+        'student_self_registration_enabled' => ['nullable', 'boolean'],
+        'registration_start_at' => ['nullable', 'date'],
+        'registration_end_at' => ['nullable', 'date'],
+
+        'requires_admin_approval' => ['nullable', 'boolean'],
+        'allow_add_drop' => ['nullable', 'boolean'],
+        'add_drop_start_at' => ['nullable', 'date'],
+        'add_drop_end_at' => ['nullable', 'date'],
+
+        'min_credit_hours' => ['nullable', 'numeric', 'min:0'],
+        'max_credit_hours' => ['nullable', 'numeric', 'min:0'],
+        'status_code' => ['nullable', 'string', 'max:50'],
+    ]);
+
+    return ApiResponse::success(
+        $service->saveCourseRegistrationSettings($validated),
+        'Course registration settings saved successfully.'
+    );
+}
 public function unregisterCourse(
     int $registrationId,
     StudentAcademicService $service
@@ -145,7 +240,7 @@ public function bulkAllocate(Request $request, StudentAcademicService $service):
         'student_enrollment_ids.*' => ['integer'],
 
         'student_batch_id' => ['nullable', 'integer'],
-        'section' => ['required', 'string', 'max:50'],
+        'section_id' => ['required', 'integer'],
 
         'roll_prefix' => ['nullable', 'string', 'max:50'],
         'registration_prefix' => ['nullable', 'string', 'max:50'],
@@ -193,7 +288,7 @@ public function updateEnrollmentAllocation(
 ): JsonResponse {
     $validated = $request->validate([
         'student_batch_id' => ['nullable', 'integer'],
-        'section' => ['nullable', 'string', 'max:50'],
+        'section_id' => ['nullable', 'integer'],
         'roll_no' => ['nullable', 'string', 'max:100'],
         'registration_no' => ['nullable', 'string', 'max:100'],
         'roll_sequence_no' => ['nullable', 'integer', 'min:1'],

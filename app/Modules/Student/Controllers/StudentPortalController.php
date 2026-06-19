@@ -62,6 +62,47 @@ public function availableCourses(StudentPortalService $service): JsonResponse
         'Available courses fetched successfully.'
     );
 }
+public function courseRegistrationSettings(StudentPortalService $service): JsonResponse
+{
+    return ApiResponse::success(
+        $service->courseRegistrationSettings(),
+        'Course registration settings fetched successfully.'
+    );
+}
+public function attendance(Request $request, StudentPortalService $service): JsonResponse
+{
+    return response()->json([
+        'data' => $service->attendance($request->all()),
+        'message' => 'Student attendance fetched successfully.',
+    ]);
+}
+public function selfRegistrationAvailableCourses(
+    Request $request,
+    StudentPortalService $service
+): JsonResponse {
+    return ApiResponse::success(
+        $service->selfRegistrationAvailableCourses($request->all()),
+        'Self registration available courses fetched successfully.'
+    );
+}
+
+public function submitSelfCourseRegistration(
+    Request $request,
+    StudentPortalService $service
+): JsonResponse {
+    $validated = $request->validate([
+        'academic_term_id' => ['nullable', 'integer'],
+        'term_number' => ['nullable', 'integer'],
+        'curriculum_subject_ids' => ['required', 'array', 'min:1'],
+        'curriculum_subject_ids.*' => ['integer'],
+        'remarks' => ['nullable', 'string', 'max:1000'],
+    ]);
+
+    return ApiResponse::success(
+        $service->submitSelfCourseRegistration($validated),
+        'Course registration submitted successfully.'
+    );
+}
 public function submitProfileCorrectionRequest(
     Request $request,
     StudentPortalService $service

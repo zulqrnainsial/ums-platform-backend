@@ -1523,7 +1523,7 @@ private function optionSections(int $tenantId, array $filters): array
         return DB::table('student_enrollments')
             ->where('tenant_id', $tenantId)
             ->whereNotNull('section')
-            ->where('section', '!=', '')
+            ->where('section_id', $filters['section_id'] ?? null)
             ->select('section')
             ->distinct()
             ->orderBy('section')
@@ -1893,6 +1893,431 @@ public function unregisterCourse(int $registrationId): array
     return [
         'registration_id' => $registrationId,
         'status' => 'cancelled',
+    ];
+}
+public function bulkCourseRegistrationContext(array $filters = []): array
+{
+    $tenantId = $this->tenantId();
+
+    return [
+        'academic_sessions' => $this->optionAcademicSessions($tenantId, $filters),
+        'programs' => $this->optionPrograms($tenantId, $filters),
+        'academic_terms' => $this->optionAcademicTerms($tenantId, $filters),
+        'student_batches' => $this->optionStudentBatches($tenantId, $filters),
+        'sections' => $this->optionSections($tenantId, $filters),
+        'settings' => $this->courseRegistrationSettings($filters),
+    ];
+}
+public function previewBulkCourseRegistration(array $filters): array
+{
+    $tenantId = $this->tenantId();
+
+    $students = $this->studentsForBulkCourseRegistration($tenantId, $filters);
+    $subjects = $this->curriculumSubjectsForBulkCourseRegistration($tenantId, $filters);
+
+    $enrollmentIds = collect($students)->pluck('student_enrollment_id')->filter()->values()->all();
+    $subjectIds = collect($subjects)->pluck('curriculum_subject_id')->filter()->values()->all();
+
+    $existing = [];
+
+    if (
+        Schema::hasTable('student_course_registrations') &&
+        !empty($enrollmentIds) &&
+        !empty($subjectIds)
+    ) {
+        $existing = DB::table('student_course_registrations')
+            ->where('tenant_id', $tenantId)
+            ->whereIn('student_enrollment_id', $enrollmentIds)
+            ->whereIn('curriculum_subject_id', $subjectIds)
+            ->whereIn('status', ['pending', 'registered', 'approved', 'completed'])
+            ->get()
+            ->map(fn ($row) => $row->student_enrollment_id . ':' . $row->curriculum_subject_id)
+            ->toArray();
+    }
+
+    $totalPossible = count($students) * count($subjects);
+    $alreadyRegistered = count($existing);
+
+    return [
+        'students' => $students,
+        'subjects' => $subjects,
+        'summary' => [
+            'students_count' => count($students),
+            'subjects_count' => count($subjects),
+            'total_possible_registrations' => $totalPossible,
+            'already_registered_count' => $alreadyRegistered,
+            'missing_registrations_count' => max($totalPossible - $alreadyRegistered, 0),
+        ],
+        'existing_keys' => $existing,
+    ];
+}
+public function registerBulkCourses(array $data): array
+{
+    $tenantId = $this->tenantId();
+
+    abort_if(!Schema::hasTable('student_course_registrations'), 404, 'Student course registrations table not found.');
+    abort_if(!Schema::hasTable('student_enrollments'), 404, 'Student enrollments table not found.');
+    abort_if(!Schema::hasTable('curriculum_subjects'), 404, 'Curriculum subjects table not found.');
+
+    $registrationType = $data['registration_type'] ?? 'regular';
+
+    $enrollments = DB::table('student_enrollments')
+        ->where('tenant_id', $tenantId)
+        ->whereIn('id', $data['student_enrollment_ids'])
+        ->where('program_id', $data['program_id'])
+        ->where('academic_session_id', $data['academic_session_id'])
+        ->get();
+
+    abort_if($enrollments->isEmpty(), 422, 'No valid student enrollments found.');
+
+    $subjectsQuery = DB::table('curriculum_subjects')
+        ->where('tenant_id', $tenantId)
+        ->whereIn('id', $data['curriculum_subject_ids'])
+        ->where('program_id', $data['program_id'])
+        ->where('status', 'active')
+        ->whereNull('deleted_at');
+
+    if (!empty($data['academic_term_id'])) {
+        $subjectsQuery->where('academic_term_id', $data['academic_term_id']);
+    }
+
+    if (!empty($data['term_number'])) {
+        $subjectsQuery->where('term_number', $data['term_number']);
+    }
+
+    $subjects = $subjectsQuery->get();
+
+    abort_if($subjects->isEmpty(), 422, 'No valid curriculum subjects found.');
+
+    $created = [];
+    $skipped = [];
+
+    DB::transaction(function () use (
+        $tenantId,
+        $enrollments,
+        $subjects,
+        $registrationType,
+        $data,
+        &$created,
+        &$skipped
+    ) {
+        foreach ($enrollments as $enrollment) {
+            foreach ($subjects as $subject) {
+                $result = $this->createCourseRegistrationIfMissing(
+                    tenantId: $tenantId,
+                    enrollment: $enrollment,
+                    curriculumSubject: $subject,
+                    registrationType: $registrationType,
+                    registrationSource: 'admin_bulk',
+                    status: 'registered',
+                    remarks: $data['remarks'] ?? null
+                );
+
+                if ($result['created']) {
+                    $created[] = $result['registration'];
+                } else {
+                    $skipped[] = $result['reason'];
+                }
+            }
+        }
+    });
+
+    return [
+        'created_count' => count($created),
+        'skipped_count' => count($skipped),
+        'created' => $created,
+        'skipped' => $skipped,
+    ];
+}
+public function courseRegistrationSettings(array $filters = []): array
+{
+    $tenantId = $this->tenantId();
+
+    if (!Schema::hasTable('course_registration_settings')) {
+        return [
+            'student_self_registration_enabled' => false,
+            'requires_admin_approval' => true,
+            'allow_add_drop' => false,
+        ];
+    }
+
+    $query = DB::table('course_registration_settings')
+        ->where('tenant_id', $tenantId)
+        ->where('status_code', 'active');
+
+    if (!empty($filters['academic_session_id'])) {
+        $query->where('academic_session_id', $filters['academic_session_id']);
+    }
+
+    if (!empty($filters['program_id'])) {
+        $query->where(function ($q) use ($filters) {
+            $q->where('program_id', $filters['program_id'])
+                ->orWhereNull('program_id');
+        });
+    }
+
+    if (!empty($filters['academic_term_id'])) {
+        $query->where(function ($q) use ($filters) {
+            $q->where('academic_term_id', $filters['academic_term_id'])
+                ->orWhereNull('academic_term_id');
+        });
+    }
+
+    $setting = $query
+        ->orderByRaw('program_id IS NULL')
+        ->orderByRaw('academic_term_id IS NULL')
+        ->orderByDesc('id')
+        ->first();
+
+    return $setting ? (array) $setting : [
+        'student_self_registration_enabled' => false,
+        'requires_admin_approval' => true,
+        'allow_add_drop' => false,
+    ];
+}
+
+public function saveCourseRegistrationSettings(array $data): array
+{
+    $tenantId = $this->tenantId();
+
+    abort_if(!Schema::hasTable('course_registration_settings'), 404, 'Course registration settings table not found.');
+
+    $lookup = [
+        'tenant_id' => $tenantId,
+        'academic_session_id' => $data['academic_session_id'],
+        'program_id' => $data['program_id'] ?? null,
+        'academic_term_id' => $data['academic_term_id'] ?? null,
+    ];
+
+    $payload = [
+        'student_self_registration_enabled' => (bool) ($data['student_self_registration_enabled'] ?? false),
+        'registration_start_at' => $data['registration_start_at'] ?? null,
+        'registration_end_at' => $data['registration_end_at'] ?? null,
+        'requires_admin_approval' => (bool) ($data['requires_admin_approval'] ?? true),
+        'allow_add_drop' => (bool) ($data['allow_add_drop'] ?? false),
+        'add_drop_start_at' => $data['add_drop_start_at'] ?? null,
+        'add_drop_end_at' => $data['add_drop_end_at'] ?? null,
+        'min_credit_hours' => $data['min_credit_hours'] ?? null,
+        'max_credit_hours' => $data['max_credit_hours'] ?? null,
+        'status_code' => $data['status_code'] ?? 'active',
+        'updated_by' => auth()->id(),
+        'updated_at' => now(),
+    ];
+
+    $existing = DB::table('course_registration_settings')
+        ->where($lookup)
+        ->first();
+
+    if ($existing) {
+        DB::table('course_registration_settings')
+            ->where('id', $existing->id)
+            ->update($payload);
+
+        return ['id' => $existing->id, 'updated' => true];
+    }
+
+    $payload = array_merge($lookup, $payload, [
+        'created_by' => auth()->id(),
+        'created_at' => now(),
+    ]);
+
+    $id = DB::table('course_registration_settings')->insertGetId($payload);
+
+    return ['id' => $id, 'created' => true];
+}
+private function studentsForBulkCourseRegistration(int $tenantId, array $filters): array
+{
+    $query = DB::table('student_enrollments as se')
+        ->join('students as s', 's.id', '=', 'se.student_id')
+        ->where(function ($q) use ($tenantId) {
+            $q->where('se.tenant_id', $tenantId)
+                ->orWhereNull('se.tenant_id');
+        })
+        ->where(function ($q) use ($tenantId) {
+            $q->where('s.tenant_id', $tenantId)
+                ->orWhereNull('s.tenant_id');
+        });
+
+    if (!empty($filters['program_id'])) {
+        $query->where(function ($q) use ($filters) {
+            $q->where('se.program_id', $filters['program_id']);
+
+            if (Schema::hasColumn('student_enrollments', 'offered_program_id')) {
+                $q->orWhere('se.offered_program_id', $filters['program_id']);
+            }
+        });
+    }
+
+    if (!empty($filters['academic_session_id'])) {
+        $query->where(function ($q) use ($filters) {
+            $q->where('se.academic_session_id', $filters['academic_session_id']);
+
+            if (Schema::hasColumn('student_enrollments', 'admission_session_id')) {
+                $q->orWhere('se.admission_session_id', $filters['academic_session_id']);
+            }
+        });
+    }
+
+    if (!empty($filters['student_batch_id'])) {
+        $query->where('se.student_batch_id', $filters['student_batch_id']);
+    }
+
+    if (!empty($filters['section'])) {
+        $query->where('se.section', $filters['section']);
+    }
+
+    if (Schema::hasColumn('student_enrollments', 'status_code')) {
+        $query->where(function ($q) {
+            $q->whereNull('se.status_code')
+                ->orWhereIn('se.status_code', ['active', 'enrolled']);
+        });
+    }
+
+    if (Schema::hasColumn('student_enrollments', 'enrollment_status_code')) {
+        $query->where(function ($q) {
+            $q->whereNull('se.enrollment_status_code')
+                ->orWhereIn('se.enrollment_status_code', ['enrolled', 'active']);
+        });
+    }
+
+    return $query
+        ->select([
+            'se.id as student_enrollment_id',
+            'se.student_id',
+            'se.student_batch_id',
+            'se.section',
+            'se.roll_no',
+            'se.registration_no',
+            'se.enrollment_status_code',
+            'se.status_code',
+            's.student_no',
+            's.full_name as student_name',
+            's.cnic_bform',
+        ])
+        ->orderBy('se.roll_sequence_no')
+        ->orderBy('s.full_name')
+        ->get()
+        ->map(fn ($row) => (array) $row)
+        ->values()
+        ->toArray();
+}
+
+private function curriculumSubjectsForBulkCourseRegistration(int $tenantId, array $filters): array
+{
+    $query = DB::table('curriculum_subjects as cs')
+        ->where('cs.tenant_id', $tenantId)
+        ->where('cs.program_id', $filters['program_id'])
+        ->where('cs.status', 'active')
+        ->whereNull('cs.deleted_at');
+
+    if (!empty($filters['academic_term_id'])) {
+        $query->where('cs.academic_term_id', $filters['academic_term_id']);
+    }
+
+    if (!empty($filters['term_number'])) {
+        $query->where('cs.term_number', $filters['term_number']);
+    }
+
+    return $query
+        ->select([
+            'cs.id as curriculum_subject_id',
+            'cs.curriculum_id',
+            'cs.program_id',
+            'cs.academic_term_id',
+            'cs.subject_id',
+            'cs.subject_code as course_code',
+            'cs.subject_name as course_title',
+            'cs.subject_nature as subject_type_code',
+            'cs.term_number as term_no',
+            'cs.credit_hours',
+            'cs.is_compulsory',
+            'cs.is_credit_subject',
+        ])
+        ->orderBy('cs.term_number')
+        ->orderBy('cs.display_order')
+        ->orderBy('cs.subject_code')
+        ->get()
+        ->map(fn ($row) => (array) $row)
+        ->values()
+        ->toArray();
+}
+
+private function createCourseRegistrationIfMissing(
+    int $tenantId,
+    object $enrollment,
+    object $curriculumSubject,
+    string $registrationType,
+    string $registrationSource,
+    string $status,
+    ?string $remarks = null
+): array {
+    $exists = DB::table('student_course_registrations')
+        ->where('tenant_id', $tenantId)
+        ->where('student_enrollment_id', $enrollment->id)
+        ->where('curriculum_subject_id', $curriculumSubject->id)
+        ->where('registration_type', $registrationType)
+        ->whereIn('status', ['pending', 'registered', 'approved', 'completed'])
+        ->first();
+
+    if ($exists) {
+        return [
+            'created' => false,
+            'reason' => [
+                'student_enrollment_id' => $enrollment->id,
+                'curriculum_subject_id' => $curriculumSubject->id,
+                'message' => 'Already registered.',
+            ],
+        ];
+    }
+
+    $payload = [
+        'tenant_id' => $tenantId,
+        'student_id' => $enrollment->student_id,
+        'student_enrollment_id' => $enrollment->id,
+
+        'program_id' => $enrollment->program_id,
+        'academic_session_id' => $enrollment->academic_session_id,
+        'academic_term_id' => $curriculumSubject->academic_term_id ?? null,
+        'term_id' => null,
+
+        'student_batch_id' => $enrollment->student_batch_id ?? null,
+        'section' => $enrollment->section ?? null,
+
+        'curriculum_id' => $curriculumSubject->curriculum_id ?? null,
+        'curriculum_subject_id' => $curriculumSubject->id,
+        'subject_id' => $curriculumSubject->subject_id ?? null,
+
+        'course_code' => $curriculumSubject->subject_code ?? null,
+        'course_title' => $curriculumSubject->subject_name ?? null,
+        'credit_hours' => $curriculumSubject->credit_hours ?? 0,
+        'subject_type_code' => $curriculumSubject->subject_nature ?? null,
+
+        'registration_type' => $registrationType,
+        'registration_source' => $registrationSource,
+        'status' => $status,
+        'is_locked' => false,
+        'registered_at' => now(),
+
+        'requested_by' => $registrationSource === 'student_self' ? auth()->id() : null,
+        'approved_by' => in_array($status, ['registered', 'approved'], true) ? auth()->id() : null,
+        'approved_at' => in_array($status, ['registered', 'approved'], true) ? now() : null,
+
+        'remarks' => $remarks,
+        'created_by' => auth()->id(),
+        'updated_by' => auth()->id(),
+        'created_at' => now(),
+        'updated_at' => now(),
+    ];
+
+    $payload = collect($payload)
+        ->filter(fn ($value, $column) => Schema::hasColumn('student_course_registrations', $column))
+        ->toArray();
+
+    $id = DB::table('student_course_registrations')->insertGetId($payload);
+
+    return [
+        'created' => true,
+        'registration' => array_merge(['id' => $id], $payload),
     ];
 }
 public function allocationContext(array $filters): array
