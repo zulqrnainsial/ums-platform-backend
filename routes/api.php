@@ -60,6 +60,8 @@ use App\Modules\Student\Controllers\StudentRequestAdminController;
 use App\Modules\Attendance\Controllers\AttendanceMarkingController;
 use App\Modules\Attendance\Controllers\AttendanceSessionController;
 use App\Modules\Attendance\Controllers\AttendanceReportController;
+use App\Modules\FacultyAllocation\Controllers\FacultyAllocationController;
+use App\Modules\ResourceManagement\Controllers\ResourceManagementController;
 
 Route::get('/health', function () {
     return ApiResponse::success([
@@ -688,6 +690,69 @@ Route::middleware(['auth:sanctum', 'tenant.active'])->group(function () {
         Route::post('/roles/{role}/assign-permissions', [RoleController::class, 'assignPermissions']);
         Route::apiResource('roles', RoleController::class);
         Route::post('/users/{user}/assign-roles', [UserRoleController::class, 'assignRoles']);
+    });
+
+    /*
+    |--------------------------------------------------------------------------
+    | Faculty Allocation
+    |--------------------------------------------------------------------------
+    */
+    Route::prefix('faculty-allocation')->group(function () {
+        Route::get('/context', [FacultyAllocationController::class, 'context']);
+
+        Route::get('/faculty-members', [FacultyAllocationController::class, 'facultyMembers']);
+        Route::post('/faculty-members', [FacultyAllocationController::class, 'storeFacultyMember']);
+        Route::put('/faculty-members/{facultyMember}', [FacultyAllocationController::class, 'updateFacultyMember']);
+
+        Route::get('/load-policies', [FacultyAllocationController::class, 'loadPolicies']);
+        Route::post('/load-policies', [FacultyAllocationController::class, 'storeLoadPolicy']);
+
+        Route::get('/faculty-members/{facultyMember}/availability', [FacultyAllocationController::class, 'availability']);
+        Route::post('/faculty-members/{facultyMember}/availability', [FacultyAllocationController::class, 'storeAvailability']);
+
+        Route::get('/faculty-members/{facultyMember}/subject-expertise', [FacultyAllocationController::class, 'subjectExpertise']);
+        Route::post('/faculty-members/{facultyMember}/subject-expertise', [FacultyAllocationController::class, 'storeSubjectExpertise']);
+
+        Route::get('/course-offerings', [FacultyAllocationController::class, 'courseOfferings']);
+        Route::post('/course-offerings', [FacultyAllocationController::class, 'storeCourseOffering']);
+        Route::put('/course-offerings/{courseOffering}', [FacultyAllocationController::class, 'updateCourseOffering']);
+        Route::post('/course-offerings/create-split', [FacultyAllocationController::class, 'createSplitCourseOfferings']);
+
+        Route::get('/allocations', [FacultyAllocationController::class, 'allocations']);
+        Route::post('/allocations/validate', [FacultyAllocationController::class, 'validateAllocation']);
+        Route::post('/allocations', [FacultyAllocationController::class, 'storeAllocation']);
+
+        Route::get('/conflicts', [FacultyAllocationController::class, 'conflicts']);
+
+        Route::get('/teaching-groups', [FacultyAllocationController::class, 'teachingGroups']);
+        Route::post('/teaching-groups', [FacultyAllocationController::class, 'storeTeachingGroup']);
+        Route::put('/teaching-groups/{teachingGroup}', [FacultyAllocationController::class, 'updateTeachingGroup']);
+
+        Route::get('/teaching-groups/{teachingGroup}/members', [FacultyAllocationController::class, 'teachingGroupMembers']);
+        Route::post('/teaching-groups/{teachingGroup}/members/sync', [FacultyAllocationController::class, 'syncTeachingGroupMembers']);
+
+        Route::get('/eligible-students', [FacultyAllocationController::class, 'eligibleStudentsForTeachingGroup']);
+        Route::post('/teaching-groups/create-practical-from-section', [FacultyAllocationController::class, 'createPracticalGroupsFromSection']);
+
+    });
+    /*
+    |--------------------------------------------------------------------------
+    | Dashboard Summary
+    |--------------------------------------------------------------------------
+    */
+    Route::prefix('resource-management')->group(function () {
+        Route::get('/context', [ResourceManagementController::class, 'context']);
+
+        Route::get('/buildings', [ResourceManagementController::class, 'buildings']);
+        Route::post('/buildings', [ResourceManagementController::class, 'storeBuilding']);
+
+        Route::get('/floors', [ResourceManagementController::class, 'floors']);
+        Route::post('/floors', [ResourceManagementController::class, 'storeFloor']);
+
+        Route::get('/rooms', [ResourceManagementController::class, 'rooms']);
+        Route::post('/rooms', [ResourceManagementController::class, 'storeRoom']);
+
+        Route::get('/rooms/available', [ResourceManagementController::class, 'availableRooms']);
     });
 
     /*
