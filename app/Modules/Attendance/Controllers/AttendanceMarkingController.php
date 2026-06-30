@@ -26,6 +26,7 @@ class AttendanceMarkingController extends Controller
             'student_batch_id' => ['required', 'integer'],
             'section_id' => ['required', 'integer'],
             'curriculum_subject_id' => ['required', 'integer'],
+            'timetable_entry_id' => ['nullable', 'integer'],
         ]);
 
         return response()->json([
@@ -43,6 +44,7 @@ class AttendanceMarkingController extends Controller
             'student_batch_id' => ['required', 'integer'],
             'section_id' => ['required', 'integer'],
             'curriculum_subject_id' => ['required', 'integer'],
+            'timetable_entry_id' => ['nullable', 'integer'],
 
             'attendance_date' => ['required', 'date'],
             'session_type' => ['nullable', 'string', 'max:50'],

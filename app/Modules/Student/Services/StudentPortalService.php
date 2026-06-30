@@ -249,6 +249,151 @@ public function courseRegistrationSettings(): array
         'window_open' => $windowOpen,
     ]);
 }
+public function timetable(): array
+{
+    $student = $this->currentStudent();
+    $enrollment = $this->currentEnrollment((int) $student->id);
+
+    abort_if(!$enrollment, 404, 'Current enrollment not found.');
+
+    $sectionId = $this->studentSectionId(
+        (int) $student->tenant_id,
+        (int) $enrollment->id,
+        $enrollment->section ?? null
+    );
+
+    $groupIds = $this->studentTeachingGroupIds(
+        (int) $student->tenant_id,
+        (int) $enrollment->id
+    );
+
+    if (!$sectionId && empty($groupIds)) {
+        return [
+            'today_classes' => [],
+            'weekly_classes' => [],
+            'current_enrollment' => (array) $enrollment,
+        ];
+    }
+
+    $query = DB::table('timetable_entries as te')
+        ->join('timetable_entry_slots as tes', 'tes.timetable_entry_id', '=', 'te.id')
+        ->join('timetable_slots as ts', 'ts.id', '=', 'tes.timetable_slot_id')
+        ->join('course_offerings as co', 'co.id', '=', 'te.course_offering_id')
+        ->leftJoin('faculty_members as fm', 'fm.id', '=', 'te.faculty_member_id')
+        ->leftJoin('rooms as r', 'r.id', '=', 'te.room_id')
+        ->leftJoin('sections as sec', 'sec.id', '=', 'te.section_id')
+        ->leftJoin(
+            'academic_teaching_groups as atg',
+            'atg.id',
+            '=',
+            'te.academic_teaching_group_id'
+        )
+        ->where('te.tenant_id', $student->tenant_id)
+        ->where('te.status_code', 'published')
+        ->where('te.is_active', 1)
+        ->whereNull('te.deleted_at');
+
+    if (!empty($enrollment->academic_session_id)) {
+        $query->where('te.academic_session_id', $enrollment->academic_session_id);
+    }
+
+    if (!empty($enrollment->term_id)) {
+        $query->where('te.academic_term_id', $enrollment->term_id);
+    }
+
+    $query->where(function ($scope) use ($sectionId, $groupIds) {
+        if ($sectionId) {
+            $scope->where(function ($sectionScope) use ($sectionId) {
+                $sectionScope
+                    ->where('te.section_id', $sectionId)
+                    ->whereNull('te.academic_teaching_group_id');
+            });
+        }
+
+        if (!empty($groupIds)) {
+            if ($sectionId) {
+                $scope->orWhereIn('te.academic_teaching_group_id', $groupIds);
+            } else {
+                $scope->whereIn('te.academic_teaching_group_id', $groupIds);
+            }
+        }
+    });
+
+    $rows = $query
+        ->select([
+            'te.id as timetable_entry_id',
+            'te.day_of_week',
+            'te.academic_session_id',
+            'te.academic_term_id',
+
+            'tes.sort_order as entry_slot_sort_order',
+
+            'ts.slot_code',
+            'ts.start_time',
+            'ts.end_time',
+
+            'co.course_code',
+            'co.course_title',
+            'co.subject_type_code',
+
+            'fm.full_name as teacher_name',
+
+            'r.code as room_code',
+            'r.name as room_name',
+
+            'sec.code as section_code',
+            'sec.name as section_name',
+
+            'atg.group_code',
+            'atg.group_name',
+        ])
+        ->orderBy('te.day_of_week')
+        ->orderBy('tes.sort_order')
+        ->get();
+
+    $entries = [];
+
+    foreach ($rows as $row) {
+        $entryId = (int) $row->timetable_entry_id;
+
+        if (!isset($entries[$entryId])) {
+            $entries[$entryId] = [
+                'timetable_entry_id' => $entryId,
+                'day_of_week' => (int) $row->day_of_week,
+                'day_label' => $this->timetableDayLabel((int) $row->day_of_week),
+
+                'course_code' => $row->course_code,
+                'course_title' => $row->course_title,
+                'subject_type_code' => $row->subject_type_code,
+
+                'scope' => $row->group_code
+                    ? trim($row->group_code . ' - ' . $row->group_name)
+                    : trim(($row->section_code ?? '') . ' - ' . ($row->section_name ?? '')),
+
+                'teacher_name' => $row->teacher_name,
+                'room' => trim(($row->room_code ?? '') . ' - ' . ($row->room_name ?? '')),
+
+                'start_time' => $row->start_time,
+                'end_time' => $row->end_time,
+                'slots' => [],
+            ];
+        }
+
+        $entries[$entryId]['slots'][] = $row->slot_code;
+        $entries[$entryId]['end_time'] = $row->end_time;
+    }
+
+    $weeklyClasses = array_values($entries);
+
+    return [
+        'today_classes' => array_values(array_filter(
+            $weeklyClasses,
+            fn (array $entry) => $entry['day_of_week'] === now()->isoWeekday()
+        )),
+        'weekly_classes' => $weeklyClasses,
+        'current_enrollment' => (array) $enrollment,
+    ];
+}
 public function attendance(array $filters = []): array
 {
     $student = $this->currentStudent();
@@ -489,6 +634,79 @@ public function submitSelfCourseRegistration(array $data): array
         'created' => $created,
         'skipped' => $skipped,
     ];
+}
+private function studentSectionId(
+    int $tenantId,
+    int $studentEnrollmentId,
+    ?string $sectionLabel
+): ?int {
+    if (
+        Schema::hasColumn('student_enrollments', 'section_id')
+    ) {
+        $sectionId = DB::table('student_enrollments')
+            ->where('id', $studentEnrollmentId)
+            ->value('section_id');
+
+        if ($sectionId) {
+            return (int) $sectionId;
+        }
+    }
+
+    if (
+        !$sectionLabel ||
+        !Schema::hasTable('sections')
+    ) {
+        return null;
+    }
+
+    $query = DB::table('sections')
+        ->where(function ($q) use ($sectionLabel) {
+            $q->where('code', $sectionLabel)
+                ->orWhere('name', $sectionLabel);
+        });
+
+    if (Schema::hasColumn('sections', 'tenant_id')) {
+        $query->where('tenant_id', $tenantId);
+    }
+
+    return $query->value('id');
+}
+
+private function studentTeachingGroupIds(
+    int $tenantId,
+    int $studentEnrollmentId
+): array {
+    if (!Schema::hasTable('academic_teaching_group_members')) {
+        return [];
+    }
+
+    $query = DB::table('academic_teaching_group_members')
+        ->where('tenant_id', $tenantId)
+        ->where('student_enrollment_id', $studentEnrollmentId);
+
+    if (Schema::hasColumn('academic_teaching_group_members', 'status_code')) {
+        $query->where('status_code', 'active');
+    }
+
+    return $query
+        ->pluck('academic_teaching_group_id')
+        ->filter()
+        ->map(fn ($id) => (int) $id)
+        ->values()
+        ->all();
+}
+
+private function timetableDayLabel(int $day): string
+{
+    return [
+        1 => 'Monday',
+        2 => 'Tuesday',
+        3 => 'Wednesday',
+        4 => 'Thursday',
+        5 => 'Friday',
+        6 => 'Saturday',
+        7 => 'Sunday',
+    ][$day] ?? 'Unknown';
 }
 private function currentEnrollmentId(int $studentId): ?int
 {

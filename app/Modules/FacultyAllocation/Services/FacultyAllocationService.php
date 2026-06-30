@@ -4,6 +4,7 @@ namespace App\Modules\FacultyAllocation\Services;
 
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Hash;
 
 class FacultyAllocationService
 {
@@ -23,6 +24,21 @@ class FacultyAllocationService
             'sections' => $this->sections($tenantId, $filters),
             'curriculum_subjects' => $this->curriculumSubjects($tenantId, $filters),
             'faculty_members' => $this->facultyMemberOptions($tenantId),
+            'faculties' => DB::table('faculties')
+                ->where('tenant_id', $tenantId)
+                ->where('status', 'active')
+                ->whereNull('deleted_at')
+                ->orderBy('name')
+                ->get([
+                    'id',
+                    'code',
+                    'name',
+                ])
+                ->map(fn ($row) => (array) $row)
+                ->all(),
+
+            'departments' => $this->departments($tenantId),
+
             'employment_types' => $this->lookupValues($tenantId, 'faculty_employment_type'),
             'designations' => $this->lookupValues($tenantId, 'faculty_designation'),
             'subject_types' => $this->lookupValues($tenantId, 'subject_type'),
@@ -34,6 +50,8 @@ class FacultyAllocationService
         $tenantId = $this->tenantId();
 
         $query = DB::table('faculty_members as fm')
+            ->leftJoin('faculties as f', 'f.id', '=', 'fm.faculty_id')
+            ->leftJoin('departments as d', 'd.id', '=', 'fm.department_id')
             ->where('fm.tenant_id', $tenantId)
             ->whereNull('fm.deleted_at');
 
@@ -54,7 +72,13 @@ class FacultyAllocationService
         }
 
         return $query
-            ->select('fm.*')
+            ->select([
+                'fm.*',
+                'f.code as faculty_code',
+                'f.name as faculty_name',
+                'd.code as department_code',
+                'd.name as department_name',
+            ])
             ->orderBy('fm.full_name')
             ->paginate((int) ($filters['per_page'] ?? 15))
             ->toArray();
@@ -222,6 +246,14 @@ private function insertCourseOfferingIfMissing(array $payload): array
         ->first();
 
     if ($existing) {
+        if (($existing->status_code ?? null) === 'cancelled' && ($payload['status_code'] ?? 'offered') !== 'cancelled') {
+            DB::table('course_offerings')->where('id', $existing->id)->update([
+                'status_code' => $payload['status_code'] ?? 'offered',
+                'updated_by' => auth()->id(),
+                'updated_at' => now(),
+            ]);
+            return $this->courseOffering($existing->id);
+        }
         return (array) $existing;
     }
 
@@ -274,6 +306,20 @@ public function teachingGroups(array $filters = []): array
 public function createTeachingGroup(array $data): array
 {
     $tenantId = $this->tenantId();
+
+    $existing = DB::table('academic_teaching_groups')
+        ->where('tenant_id', $tenantId)
+        ->where('academic_session_id', $data['academic_session_id'] ?? null)
+        ->where('academic_term_id', $data['academic_term_id'] ?? null)
+        ->where('program_id', $data['program_id'] ?? null)
+        ->where('student_batch_id', $data['student_batch_id'] ?? null)
+        ->where('group_code', $data['group_code'])
+        ->whereNull('deleted_at')
+        ->first();
+
+    if ($existing) {
+        return (array) $existing;
+    }
 
     $payload = $this->onlyColumns('academic_teaching_groups', array_merge($data, [
         'tenant_id' => $tenantId,
@@ -534,17 +580,32 @@ private function teachingGroup(int $id): array
     {
         $tenantId = $this->tenantId();
 
-        $payload = $this->onlyColumns('faculty_members', array_merge($data, [
-            'tenant_id' => $tenantId,
-            'created_by' => auth()->id(),
-            'updated_by' => auth()->id(),
-            'created_at' => now(),
-            'updated_at' => now(),
-        ]));
+        return DB::transaction(function () use ($tenantId, $data) {
+            $userId = $this->resolveFacultyUser($tenantId, $data);
 
-        $id = DB::table('faculty_members')->insertGetId($payload);
+            $payload = $this->onlyColumns('faculty_members', array_merge($data, [
+                'tenant_id' => $tenantId,
+                'user_id' => $userId,
+                'created_by' => auth()->id(),
+                'updated_by' => auth()->id(),
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]));
 
-        return $this->facultyMember($id);
+            $existing = DB::table('faculty_members')
+                ->where('tenant_id', $tenantId)
+                ->where('employee_no', $data['employee_no'] ?? null)
+                ->whereNull('deleted_at')
+                ->first();
+
+            if ($existing) {
+                DB::table('faculty_members')->where('id', $existing->id)->update($payload);
+                return $this->facultyMember($existing->id);
+            }
+
+            $id = DB::table('faculty_members')->insertGetId($payload);
+            return $this->facultyMember($id);
+        });
     }
 
     public function updateFacultyMember(int $id, array $data): array
@@ -559,16 +620,32 @@ private function teachingGroup(int $id): array
 
         abort_if(!$faculty, 404, 'Faculty member not found.');
 
-        $payload = $this->onlyColumns('faculty_members', array_merge($data, [
-            'updated_by' => auth()->id(),
-            'updated_at' => now(),
-        ]));
+        return DB::transaction(function () use ($tenantId, $id, $faculty, $data) {
+            $userId = $faculty->user_id;
+            if (!empty($data['create_login']) || !empty($data['user_id'])) {
+                $userId = $this->resolveFacultyUser($tenantId, array_merge((array) $faculty, $data));
+            }
 
-        DB::table('faculty_members')
-            ->where('id', $id)
-            ->update($payload);
+            $payload = $this->onlyColumns('faculty_members', array_merge($data, [
+                'user_id' => $userId,
+                'updated_by' => auth()->id(),
+                'updated_at' => now(),
+            ]));
 
-        return $this->facultyMember($id);
+            DB::table('faculty_members')->where('id', $id)->update($payload);
+
+            if ($userId && !empty($data['sync_user_account'])) {
+                DB::table('users')->where('tenant_id', $tenantId)->where('id', $userId)->update([
+                    'name' => $data['full_name'] ?? $faculty->full_name,
+                    'email' => $data['email'] ?? $faculty->email,
+                    'phone' => $data['phone'] ?? $faculty->phone,
+                    'status' => ($data['status_code'] ?? $faculty->status_code) === 'active' ? 'active' : 'inactive',
+                    'updated_at' => now(),
+                ]);
+            }
+
+            return $this->facultyMember($id);
+        });
     }
 
     public function loadPolicies(array $filters = []): array
@@ -595,18 +672,34 @@ private function teachingGroup(int $id): array
     public function saveLoadPolicy(array $data): array
     {
         $tenantId = $this->tenantId();
+        $id = $data['id'] ?? null;
 
         $payload = $this->onlyColumns('faculty_load_policies', array_merge($data, [
             'tenant_id' => $tenantId,
-            'created_by' => auth()->id(),
             'updated_by' => auth()->id(),
-            'created_at' => now(),
             'updated_at' => now(),
         ]));
+        unset($payload['id']);
 
-        $id = DB::table('faculty_load_policies')->insertGetId($payload);
+        $existing = $id
+            ? DB::table('faculty_load_policies')->where('tenant_id', $tenantId)->where('id', $id)->first()
+            : DB::table('faculty_load_policies')
+                ->where('tenant_id', $tenantId)
+                ->where('employment_type_code', $data['employment_type_code'] ?? null)
+                ->where('designation_code', $data['designation_code'] ?? null)
+                ->where('faculty_type_code', $data['faculty_type_code'] ?? null)
+                ->orderByDesc('id')
+                ->first();
 
-        return (array) DB::table('faculty_load_policies')->where('id', $id)->first();
+        if ($existing) {
+            DB::table('faculty_load_policies')->where('id', $existing->id)->update($payload);
+            return (array) DB::table('faculty_load_policies')->where('id', $existing->id)->first();
+        }
+
+        $payload['created_by'] = auth()->id();
+        $payload['created_at'] = now();
+        $newId = DB::table('faculty_load_policies')->insertGetId($payload);
+        return (array) DB::table('faculty_load_policies')->where('id', $newId)->first();
     }
 
     public function availability(int $facultyMemberId, array $filters = []): array
@@ -756,7 +849,6 @@ private function teachingGroup(int $id): array
     public function createCourseOffering(array $data): array
     {
         $tenantId = $this->tenantId();
-
         $data = $this->hydrateCourseOfferingFromCurriculum($data);
 
         $payload = $this->onlyColumns('course_offerings', array_merge($data, [
@@ -767,9 +859,7 @@ private function teachingGroup(int $id): array
             'updated_at' => now(),
         ]));
 
-        $id = DB::table('course_offerings')->insertGetId($payload);
-
-        return $this->courseOffering($id);
+        return $this->insertCourseOfferingIfMissing($payload);
     }
 
     public function updateCourseOffering(int $id, array $data): array
@@ -806,7 +896,11 @@ private function teachingGroup(int $id): array
             ->join('course_offerings as co', 'co.id', '=', 'cta.course_offering_id')
             ->join('faculty_members as fm', 'fm.id', '=', 'cta.faculty_member_id')
             ->leftJoin('sections as sec', 'sec.id', '=', 'co.section_id')
-            ->leftJoin('academic_teaching_groups as atg', 'atg.id', '=', 'co.academic_teaching_group_id');
+            ->leftJoin('academic_teaching_groups as atg', 'atg.id', '=', 'co.academic_teaching_group_id')
+            ->where('cta.tenant_id', $tenantId)
+            ->whereNull('cta.deleted_at')
+            ->whereNotIn('cta.allocation_status_code', ['cancelled'])
+            ->whereNotIn('co.status_code', ['cancelled']);
 
         foreach ([
             'course_offering_id',
@@ -853,6 +947,7 @@ private function teachingGroup(int $id): array
             ->first();
 
         abort_if(!$offering, 404, 'Course offering not found.');
+        abort_if($offering->status_code === 'cancelled', 422, 'Cancelled course offerings cannot receive teacher allocations.');
 
         $faculty = DB::table('faculty_members')
             ->where('tenant_id', $tenantId)
@@ -877,9 +972,21 @@ private function teachingGroup(int $id): array
     public function createAllocation(array $data): array
     {
         $tenantId = $this->tenantId();
+        $role = $data['allocation_role_code'] ?? 'primary';
+
+        $existing = DB::table('course_teacher_allocations')
+            ->where('tenant_id', $tenantId)
+            ->where('course_offering_id', $data['course_offering_id'])
+            ->where('faculty_member_id', $data['faculty_member_id'])
+            ->where('allocation_role_code', $role)
+            ->whereNull('deleted_at')
+            ->first();
+
+        if ($existing) {
+            $data['ignore_allocation_id'] = $existing->id;
+        }
 
         $validation = $this->validateAllocation($data);
-
         $status = $validation['valid'] ? 'valid' : 'conflicted';
 
         $offering = DB::table('course_offerings')
@@ -889,42 +996,34 @@ private function teachingGroup(int $id): array
 
         $payload = $this->onlyColumns('course_teacher_allocations', array_merge($data, [
             'tenant_id' => $tenantId,
+            'allocation_role_code' => $role,
             'allocated_credit_hours' => $data['allocated_credit_hours'] ?? $offering->credit_hours ?? 0,
             'allocated_contact_hours' => $data['allocated_contact_hours'] ?? $offering->contact_hours_per_week ?? 0,
             'allocation_status_code' => $status,
-            'created_by' => auth()->id(),
             'updated_by' => auth()->id(),
-            'created_at' => now(),
             'updated_at' => now(),
         ]));
+        unset($payload['ignore_allocation_id']);
 
-        $allocationId = null;
-
-        DB::transaction(function () use ($payload, $validation, &$allocationId) {
-            $allocationId = DB::table('course_teacher_allocations')->insertGetId($payload);
-
-            foreach ($validation['conflicts'] as $conflict) {
-                DB::table('faculty_allocation_conflicts')->insert([
-                    'tenant_id' => $payload['tenant_id'],
-                    'course_teacher_allocation_id' => $allocationId,
-                    'course_offering_id' => $payload['course_offering_id'],
-                    'faculty_member_id' => $payload['faculty_member_id'],
-                    'conflict_code' => $conflict['conflict_code'],
-                    'conflict_severity' => $conflict['conflict_severity'],
-                    'conflict_message' => $conflict['conflict_message'],
-                    'conflict_context' => json_encode($conflict['conflict_context'] ?? []),
-                    'status_code' => 'open',
-                    'created_by' => auth()->id(),
-                    'updated_by' => auth()->id(),
-                    'created_at' => now(),
-                    'updated_at' => now(),
-                ]);
+        $allocationId = DB::transaction(function () use ($payload, $validation, $existing) {
+            if ($existing) {
+                DB::table('course_teacher_allocations')->where('id', $existing->id)->update($payload);
+                $id = $existing->id;
+            } else {
+                $payload['created_by'] = auth()->id();
+                $payload['created_at'] = now();
+                $id = DB::table('course_teacher_allocations')->insertGetId($payload);
             }
+
+            $this->resolveOpenAllocationConflicts($id);
+            $this->storeAllocationConflicts($id, $payload, $validation['conflicts']);
+            return $id;
         });
 
         return [
             'allocation' => $this->allocation($allocationId),
             'validation' => $validation,
+            'updated_existing' => (bool) $existing,
         ];
     }
 
@@ -954,6 +1053,109 @@ private function teachingGroup(int $id): array
             ->orderByDesc('fac.id')
             ->paginate((int) ($filters['per_page'] ?? 15))
             ->toArray();
+    }
+
+
+    public function retireCourseOffering(int $id): array
+    {
+        $tenantId = $this->tenantId();
+        $offering = DB::table('course_offerings')->where('tenant_id', $tenantId)->where('id', $id)->whereNull('deleted_at')->first();
+        abort_if(!$offering, 404, 'Course offering not found.');
+
+        DB::transaction(function () use ($tenantId, $id) {
+            DB::table('course_offerings')->where('id', $id)->update([
+                'status_code' => 'cancelled', 'updated_by' => auth()->id(), 'updated_at' => now(),
+            ]);
+            $ids = DB::table('course_teacher_allocations')->where('tenant_id', $tenantId)->where('course_offering_id', $id)->whereNull('deleted_at')->pluck('id');
+            DB::table('course_teacher_allocations')->whereIn('id', $ids)->whereNotIn('allocation_status_code', ['cancelled'])->update([
+                'allocation_status_code' => 'cancelled', 'updated_by' => auth()->id(), 'updated_at' => now(),
+            ]);
+            DB::table('faculty_allocation_conflicts')->where('tenant_id', $tenantId)->whereIn('course_teacher_allocation_id', $ids)->where('status_code', 'open')->update([
+                'status_code' => 'resolved', 'resolved_by' => auth()->id(), 'resolved_at' => now(), 'updated_by' => auth()->id(), 'updated_at' => now(),
+            ]);
+        });
+        return $this->courseOffering($id);
+    }
+
+    public function restoreCourseOffering(int $id): array
+    {
+        $tenantId = $this->tenantId();
+        $exists = DB::table('course_offerings')->where('tenant_id', $tenantId)->where('id', $id)->whereNull('deleted_at')->exists();
+        abort_if(!$exists, 404, 'Course offering not found.');
+        DB::table('course_offerings')->where('id', $id)->update(['status_code' => 'offered','updated_by'=>auth()->id(),'updated_at'=>now()]);
+        return $this->courseOffering($id);
+    }
+
+    public function allocationConflicts(int $allocationId): array
+    {
+        return DB::table('faculty_allocation_conflicts')->where('tenant_id', $this->tenantId())->where('course_teacher_allocation_id', $allocationId)->orderByDesc('id')->get()->map(fn ($row)=>(array)$row)->toArray();
+    }
+
+    public function cancelAllocation(int $allocationId): array
+    {
+        $tenantId=$this->tenantId();
+        $exists=DB::table('course_teacher_allocations')->where('tenant_id',$tenantId)->where('id',$allocationId)->whereNull('deleted_at')->exists();
+        abort_if(!$exists,404,'Teacher allocation not found.');
+        DB::transaction(function () use ($tenantId,$allocationId) {
+            DB::table('course_teacher_allocations')->where('id',$allocationId)->update(['allocation_status_code'=>'cancelled','updated_by'=>auth()->id(),'updated_at'=>now()]);
+            $this->resolveOpenAllocationConflicts($allocationId);
+        });
+        return $this->allocation($allocationId);
+    }
+
+    public function revalidateAllocation(int $allocationId): array
+    {
+        $tenantId=$this->tenantId();
+        $allocation=DB::table('course_teacher_allocations')->where('tenant_id',$tenantId)->where('id',$allocationId)->whereNull('deleted_at')->first();
+        abort_if(!$allocation,404,'Teacher allocation not found.');
+        abort_if($allocation->allocation_status_code==='cancelled',422,'Cancelled allocations cannot be revalidated. Create or restore an active allocation instead.');
+        $validation=$this->validateAllocation([
+            'course_offering_id'=>$allocation->course_offering_id,
+            'faculty_member_id'=>$allocation->faculty_member_id,
+            'allocation_role_code'=>$allocation->allocation_role_code,
+            'allocated_credit_hours'=>$allocation->allocated_credit_hours,
+            'allocated_contact_hours'=>$allocation->allocated_contact_hours,
+            'ignore_allocation_id'=>$allocationId,
+        ]);
+        DB::transaction(function () use ($allocationId,$allocation,$validation) {
+            DB::table('course_teacher_allocations')->where('id',$allocationId)->update(['allocation_status_code'=>$validation['valid']?'valid':'conflicted','updated_by'=>auth()->id(),'updated_at'=>now()]);
+            $this->resolveOpenAllocationConflicts($allocationId);
+            $this->storeAllocationConflicts($allocationId,(array)$allocation,$validation['conflicts']);
+        });
+        return ['allocation'=>$this->allocation($allocationId),'validation'=>$validation];
+    }
+
+    private function resolveOpenAllocationConflicts(int $allocationId): void
+    {
+        DB::table('faculty_allocation_conflicts')->where('tenant_id',$this->tenantId())->where('course_teacher_allocation_id',$allocationId)->where('status_code','open')->update([
+            'status_code'=>'resolved','resolved_by'=>auth()->id(),'resolved_at'=>now(),'updated_by'=>auth()->id(),'updated_at'=>now(),
+        ]);
+    }
+
+    private function storeAllocationConflicts(int $allocationId, array $payload, array $conflicts): void
+    {
+        foreach ($conflicts as $conflict) {
+            DB::table('faculty_allocation_conflicts')->insert([
+                'tenant_id'=>$payload['tenant_id'],'course_teacher_allocation_id'=>$allocationId,'course_offering_id'=>$payload['course_offering_id'],'faculty_member_id'=>$payload['faculty_member_id'],
+                'conflict_code'=>$conflict['conflict_code'],'conflict_severity'=>$conflict['conflict_severity'],'conflict_message'=>$conflict['conflict_message'],'conflict_context'=>json_encode($conflict['conflict_context'] ?? []),'status_code'=>'open',
+                'created_by'=>auth()->id(),'updated_by'=>auth()->id(),'created_at'=>now(),'updated_at'=>now(),
+            ]);
+        }
+    }
+
+    private function resolveFacultyUser(int $tenantId, array $data): ?int
+    {
+        if (empty($data['create_login']) && empty($data['user_id'])) return $data['user_id'] ?? null;
+        abort_if(empty($data['email']),422,'Email is required when creating or linking a teacher login.');
+        $user=DB::table('users')->where('tenant_id',$tenantId)->where('email',$data['email'])->whereNull('deleted_at')->first();
+        if ($user) return $user->id;
+        abort_if(empty($data['initial_password']),422,'Initial password is required for a new teacher login.');
+        $id=DB::table('users')->insertGetId([
+            'tenant_id'=>$tenantId,'name'=>$data['full_name'],'email'=>$data['email'],'password'=>Hash::make($data['initial_password']),'phone'=>$data['phone'] ?? null,'user_type'=>'teacher','status'=>'active','created_at'=>now(),'updated_at'=>now(),
+        ]);
+        $modelClass='App\Models\User';
+        if (class_exists($modelClass)) { $model=$modelClass::find($id); if ($model && method_exists($model,'assignRole')) { try { $model->assignRole($data['teacher_role_name'] ?? 'Teacher'); } catch (\Throwable $e) {} } }
+        return $id;
     }
 
     private function facultyMember(int $id): array
@@ -1026,6 +1228,7 @@ private function teachingGroup(int $id): array
             ->where('faculty_member_id', $faculty->id)
             ->whereNull('deleted_at')
             ->whereIn('allocation_status_code', ['valid', 'approved'])
+            ->when(!empty($data['ignore_allocation_id']), fn ($q) => $q->where('id', '!=', $data['ignore_allocation_id']))
             ->selectRaw('COALESCE(SUM(allocated_credit_hours), 0) as credit_hours, COALESCE(SUM(allocated_contact_hours), 0) as contact_hours')
             ->first();
 
@@ -1123,7 +1326,22 @@ private function teachingGroup(int $id): array
             ->orderByRaw('faculty_type_code IS NULL')
             ->first();
     }
-
+private function departments(int $tenantId): array
+{
+    return DB::table('departments')
+        ->where('tenant_id', $tenantId)
+        ->where('status', 'active')
+        ->whereNull('deleted_at')
+        ->orderBy('name')
+        ->get([
+            'id',
+            'faculty_id',
+            'code',
+            'name',
+        ])
+        ->map(fn ($row) => (array) $row)
+        ->all();
+}
     private function hydrateCourseOfferingFromCurriculum(array $data): array
     {
         if (empty($data['curriculum_subject_id'])) {
@@ -1285,7 +1503,11 @@ private function teachingGroup(int $id): array
                 DB::raw("CONCAT(subject_code, ' - ', subject_name) as label"),
                 'subject_code',
                 'subject_name',
+                'subject_nature',
                 'credit_hours',
+                'theory_hours',
+                'practical_hours',
+                'tutorial_hours',
             ])
             ->orderBy('subject_code')
             ->get()

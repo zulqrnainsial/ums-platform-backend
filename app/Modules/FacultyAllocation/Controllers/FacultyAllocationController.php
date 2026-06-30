@@ -29,6 +29,10 @@ class FacultyAllocationController extends Controller
     {
         $validated = $request->validate([
             'user_id' => ['nullable', 'integer'],
+            'create_login' => ['nullable', 'boolean'],
+            'initial_password' => ['nullable', 'string', 'min:8', 'max:255'],
+            'teacher_role_name' => ['nullable', 'string', 'max:100'],
+            'sync_user_account' => ['nullable', 'boolean'],
             'department_id' => ['nullable', 'integer'],
             'faculty_id' => ['nullable', 'integer'],
             'employee_no' => ['nullable', 'string', 'max:100'],
@@ -53,6 +57,10 @@ class FacultyAllocationController extends Controller
     {
         $validated = $request->validate([
             'user_id' => ['nullable', 'integer'],
+            'create_login' => ['nullable', 'boolean'],
+            'initial_password' => ['nullable', 'string', 'min:8', 'max:255'],
+            'teacher_role_name' => ['nullable', 'string', 'max:100'],
+            'sync_user_account' => ['nullable', 'boolean'],
             'department_id' => ['nullable', 'integer'],
             'faculty_id' => ['nullable', 'integer'],
             'employee_no' => ['nullable', 'string', 'max:100'],
@@ -84,6 +92,7 @@ class FacultyAllocationController extends Controller
     public function storeLoadPolicy(Request $request, FacultyAllocationService $service): JsonResponse
     {
         $validated = $request->validate([
+            'id' => ['nullable', 'integer'],
             'employment_type_code' => ['nullable', 'string', 'max:100'],
             'designation_code' => ['nullable', 'string', 'max:100'],
             'faculty_type_code' => ['nullable', 'string', 'max:100'],
@@ -418,6 +427,46 @@ public function createSplitCourseOfferings(Request $request, FacultyAllocationSe
         'message' => 'Split course offerings created successfully.',
     ]);
 }
+    public function retireCourseOffering(int $courseOffering, FacultyAllocationService $service): JsonResponse
+    {
+        return response()->json([
+            'data' => $service->retireCourseOffering($courseOffering),
+            'message' => 'Course offering retired and active allocations cancelled.',
+        ]);
+    }
+
+    public function restoreCourseOffering(int $courseOffering, FacultyAllocationService $service): JsonResponse
+    {
+        return response()->json([
+            'data' => $service->restoreCourseOffering($courseOffering),
+            'message' => 'Course offering restored successfully.',
+        ]);
+    }
+
+    public function allocationConflicts(int $allocation, FacultyAllocationService $service): JsonResponse
+    {
+        return response()->json([
+            'data' => $service->allocationConflicts($allocation),
+            'message' => 'Allocation conflicts fetched successfully.',
+        ]);
+    }
+
+    public function cancelAllocation(int $allocation, FacultyAllocationService $service): JsonResponse
+    {
+        return response()->json([
+            'data' => $service->cancelAllocation($allocation),
+            'message' => 'Teacher allocation cancelled successfully.',
+        ]);
+    }
+
+    public function revalidateExistingAllocation(int $allocation, FacultyAllocationService $service): JsonResponse
+    {
+        return response()->json([
+            'data' => $service->revalidateAllocation($allocation),
+            'message' => 'Teacher allocation revalidated successfully.',
+        ]);
+    }
+
     public function conflicts(Request $request, FacultyAllocationService $service): JsonResponse
     {
         return response()->json([

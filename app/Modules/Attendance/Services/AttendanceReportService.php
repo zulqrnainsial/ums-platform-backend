@@ -165,6 +165,162 @@ class AttendanceReportService
             })
             ->toArray();
     }
+public function myActiveSubjects(): array
+{
+    $tenantId = $this->tenantId();
+    $facultyId = $this->facultyId($tenantId);
+
+    return DB::table('timetable_entries as te')
+        ->join('course_offerings as co', 'co.id', '=', 'te.course_offering_id')
+        ->leftJoin('sections as sec', 'sec.id', '=', 'te.section_id')
+        ->leftJoin('academic_teaching_groups as tg', 'tg.id', '=', 'te.academic_teaching_group_id')
+        ->leftJoin('attendance_sessions as ats', function ($join) {
+            $join->on('ats.timetable_entry_id', '=', 'te.id')
+                ->whereNull('ats.deleted_at');
+        })
+        ->leftJoin('attendance_records as ar', 'ar.attendance_session_id', '=', 'ats.id')
+        ->where('te.tenant_id', $tenantId)
+        ->where('te.faculty_member_id', $facultyId)
+        ->where('te.status_code', 'published')
+        ->where('te.is_active', 1)
+        ->whereNull('te.deleted_at')
+        ->select([
+            'te.id as timetable_entry_id',
+            'co.course_code',
+            'co.course_title',
+            'co.subject_type_code',
+            'sec.code as section_code',
+            'sec.name as section_name',
+            'tg.group_code',
+            'tg.group_name',
+            DB::raw('COUNT(DISTINCT ats.id) as attendance_sessions_count'),
+            DB::raw('COUNT(ar.id) as total_records'),
+            DB::raw("
+                SUM(
+                    CASE
+                        WHEN ar.status_code IN ('present', 'late', 'leave', 'excused')
+                        THEN 1
+                        ELSE 0
+                    END
+                ) as attended_records
+            "),
+        ])
+        ->groupBy([
+            'te.id',
+            'co.course_code',
+            'co.course_title',
+            'co.subject_type_code',
+            'sec.code',
+            'sec.name',
+            'tg.group_code',
+            'tg.group_name',
+        ])
+        ->orderBy('co.course_code')
+        ->get()
+        ->map(fn ($row) => $this->teacherSubjectRow($row, 'active'))
+        ->values()
+        ->all();
+}
+
+public function myArchivedSubjects(): array
+{
+    $tenantId = $this->tenantId();
+    $facultyId = $this->facultyId($tenantId);
+
+    if (!\Illuminate\Support\Facades\Schema::hasTable('timetable_entry_teacher_assignment_histories')) {
+        return [];
+    }
+
+    return DB::table('timetable_entry_teacher_assignment_histories as h')
+        ->join('timetable_entries as te', 'te.id', '=', 'h.timetable_entry_id')
+        ->join('course_offerings as co', 'co.id', '=', 'te.course_offering_id')
+        ->leftJoin('sections as sec', 'sec.id', '=', 'te.section_id')
+        ->leftJoin('academic_teaching_groups as tg', 'tg.id', '=', 'te.academic_teaching_group_id')
+        ->leftJoin('attendance_sessions as ats', function ($join) {
+            $join->on('ats.timetable_entry_id', '=', 'te.id')
+                ->whereNull('ats.deleted_at');
+        })
+        ->leftJoin('attendance_records as ar', 'ar.attendance_session_id', '=', 'ats.id')
+        ->where('h.tenant_id', $tenantId)
+        ->where('h.old_faculty_member_id', $facultyId)
+        ->select([
+            'te.id as timetable_entry_id',
+            'co.course_code',
+            'co.course_title',
+            'co.subject_type_code',
+            'sec.code as section_code',
+            'sec.name as section_name',
+            'tg.group_code',
+            'tg.group_name',
+            'h.changed_at as archived_at',
+            'h.reason as archive_reason',
+            DB::raw('COUNT(DISTINCT ats.id) as attendance_sessions_count'),
+            DB::raw('COUNT(ar.id) as total_records'),
+            DB::raw("
+                SUM(
+                    CASE
+                        WHEN ar.status_code IN ('present', 'late', 'leave', 'excused')
+                        THEN 1
+                        ELSE 0
+                    END
+                ) as attended_records
+            "),
+        ])
+        ->groupBy([
+            'te.id',
+            'co.course_code',
+            'co.course_title',
+            'co.subject_type_code',
+            'sec.code',
+            'sec.name',
+            'tg.group_code',
+            'tg.group_name',
+            'h.changed_at',
+            'h.reason',
+        ])
+        ->orderByDesc('h.changed_at')
+        ->get()
+        ->map(fn ($row) => $this->teacherSubjectRow($row, 'archived'))
+        ->values()
+        ->all();
+}
+
+private function teacherSubjectRow(object $row, string $status): array
+{
+    $total = (int) ($row->total_records ?? 0);
+    $attended = (int) ($row->attended_records ?? 0);
+
+    return [
+        'timetable_entry_id' => (int) $row->timetable_entry_id,
+        'status' => $status,
+        'course_code' => $row->course_code,
+        'course_title' => $row->course_title,
+        'subject_type_code' => $row->subject_type_code,
+        'scope' => $row->group_code
+            ? trim($row->group_code . ' - ' . $row->group_name)
+            : trim(($row->section_code ?? '') . ' - ' . ($row->section_name ?? '')),
+        'attendance_sessions_count' => (int) ($row->attendance_sessions_count ?? 0),
+        'attendance_percentage' => $total > 0
+            ? round(($attended / $total) * 100, 2)
+            : 0,
+        'archived_at' => $row->archived_at ?? null,
+        'archive_reason' => $row->archive_reason ?? null,
+    ];
+}
+
+private function facultyId(int $tenantId): int
+{
+    $facultyId = DB::table('faculty_members')
+        ->where('tenant_id', $tenantId)
+        ->where('user_id', auth()->id())
+        ->where('status_code', 'active')
+        ->whereNull('deleted_at')
+        ->value('id');
+
+    abort_if(!$facultyId, 403, 'No active faculty profile is linked to this user.');
+
+    return (int) $facultyId;
+}
 
     private function applySessionFilters($query, array $filters): void
     {

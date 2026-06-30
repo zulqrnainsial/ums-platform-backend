@@ -62,6 +62,13 @@ use App\Modules\Attendance\Controllers\AttendanceSessionController;
 use App\Modules\Attendance\Controllers\AttendanceReportController;
 use App\Modules\FacultyAllocation\Controllers\FacultyAllocationController;
 use App\Modules\ResourceManagement\Controllers\ResourceManagementController;
+use App\Modules\Timetable\Controllers\TimetableController;
+use App\Modules\Timetable\Controllers\TimetableSlotSetupController;
+use App\Modules\Timetable\Controllers\TeacherTeachingWorkspaceController;
+use App\Modules\Timetable\Controllers\TimetableReportController;
+use App\Modules\Examination\Controllers\ExaminationRuleSetController;
+use App\Modules\Examination\Controllers\GradingSchemeController;
+use App\Modules\Examination\Controllers\EvaluationSchemeController;
 
 Route::get('/health', function () {
     return ApiResponse::success([
@@ -358,6 +365,7 @@ Route::middleware(['auth:sanctum', 'tenant.active'])->group(function () {
         Route::get('/course-registration/available-courses', [StudentPortalController::class, 'selfRegistrationAvailableCourses']);
         Route::post('/course-registration/submit', [StudentPortalController::class, 'submitSelfCourseRegistration']);
         Route::get('/attendance', [StudentPortalController::class, 'attendance']);
+        Route::get('/timetable', [StudentPortalController::class, 'timetable']);
     });
     /*
     |--------------------------------------------------------------------------
@@ -673,6 +681,8 @@ Route::middleware(['auth:sanctum', 'tenant.active'])->group(function () {
         Route::get('/reports/summary', [AttendanceReportController::class, 'summary']);
         Route::get('/reports/student-course-percentages', [AttendanceReportController::class, 'studentCoursePercentages']);
         Route::get('/reports/defaulters', [AttendanceReportController::class, 'defaulters']);
+        Route::get('/reports/my-active-subjects', [AttendanceReportController::class, 'myActiveSubjects']);
+        Route::get('/reports/my-archived-subjects', [AttendanceReportController::class, 'myArchivedSubjects']);
     });
 
     
@@ -734,10 +744,44 @@ Route::middleware(['auth:sanctum', 'tenant.active'])->group(function () {
         Route::get('/eligible-students', [FacultyAllocationController::class, 'eligibleStudentsForTeachingGroup']);
         Route::post('/teaching-groups/create-practical-from-section', [FacultyAllocationController::class, 'createPracticalGroupsFromSection']);
 
+        Route::post('/course-offerings/create-group-practicals', [FacultyAllocationController::class, 'createPracticalOfferingsForGroups']);
+
+        Route::post(
+            '/course-offerings/{courseOffering}/retire',
+            [FacultyAllocationController::class, 'retireCourseOffering']
+        );
+
+        Route::post(
+            '/course-offerings/{courseOffering}/restore',
+            [FacultyAllocationController::class, 'restoreCourseOffering']
+        );
+
+        Route::get(
+            '/allocations/{allocation}/conflicts',
+            [FacultyAllocationController::class, 'allocationConflicts']
+        );
+
+        Route::post(
+            '/allocations/{allocation}/cancel',
+            [FacultyAllocationController::class, 'cancelAllocation']
+        );
+
+        Route::post(
+            '/allocations/{allocation}/revalidate',
+            [FacultyAllocationController::class, 'revalidateExistingAllocation']
+        );
+
+        Route::post('/course-offerings/{courseOffering}/retire', [FacultyAllocationController::class, 'retireCourseOffering']);
+        Route::post('/course-offerings/{courseOffering}/restore', [FacultyAllocationController::class, 'restoreCourseOffering']);
+
+        Route::get('/allocations/{allocation}/conflicts', [FacultyAllocationController::class, 'allocationConflicts']);
+        Route::post('/allocations/{allocation}/cancel', [FacultyAllocationController::class, 'cancelAllocation']);
+        Route::post('/allocations/{allocation}/revalidate', [FacultyAllocationController::class, 'revalidateExistingAllocation']);
+
     });
     /*
     |--------------------------------------------------------------------------
-    | Dashboard Summary
+    | Resource Management
     |--------------------------------------------------------------------------
     */
     Route::prefix('resource-management')->group(function () {
@@ -753,6 +797,154 @@ Route::middleware(['auth:sanctum', 'tenant.active'])->group(function () {
         Route::post('/rooms', [ResourceManagementController::class, 'storeRoom']);
 
         Route::get('/rooms/available', [ResourceManagementController::class, 'availableRooms']);
+    });
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | Examination Rule Engine
+    |--------------------------------------------------------------------------
+    */
+
+    Route::prefix('examination/rule-sets')->group(function () {
+        Route::get('/context', [ExaminationRuleSetController::class, 'context']);
+
+        Route::get('/', [ExaminationRuleSetController::class, 'index']);
+        Route::post('/', [ExaminationRuleSetController::class, 'store']);
+
+        Route::get('/bindings/list', [
+            ExaminationRuleSetController::class,
+            'bindings',
+        ]);
+
+        Route::post('/bindings', [
+            ExaminationRuleSetController::class,
+            'saveBinding',
+        ]);
+
+        Route::get('/{ruleSet}', [ExaminationRuleSetController::class, 'show']);
+        Route::put('/{ruleSet}', [ExaminationRuleSetController::class, 'update']);
+        Route::patch('/{ruleSet}/status', [
+            ExaminationRuleSetController::class,
+            'setStatus',
+        ]);
+    });    
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | Examination Grading Schemes and Ready Reckoners
+    |--------------------------------------------------------------------------
+    */
+
+    Route::prefix('examination/grading-schemes')->group(function () {
+        Route::get('/context', [GradingSchemeController::class, 'context']);
+
+        Route::get('/', [GradingSchemeController::class, 'index']);
+        Route::post('/', [GradingSchemeController::class, 'store']);
+
+        Route::get('/{gradingScheme}/rows', [
+            GradingSchemeController::class,
+            'rows',
+        ]);
+
+        Route::post('/{gradingScheme}/rows', [
+            GradingSchemeController::class,
+            'saveRows',
+        ]);
+
+        Route::patch('/{gradingScheme}/status', [
+            GradingSchemeController::class,
+            'setStatus',
+        ]);
+
+        Route::get('/{gradingScheme}', [
+            GradingSchemeController::class,
+            'show',
+        ]);
+
+        Route::put('/{gradingScheme}', [
+            GradingSchemeController::class,
+            'update',
+        ]);
+    });
+
+    /*
+    |--------------------------------------------------------------------------
+    | Examination Evaluation Schemes
+    |--------------------------------------------------------------------------
+    */
+
+    Route::prefix('examination/evaluation-schemes')->group(function () {
+        Route::get('/context', [EvaluationSchemeController::class, 'context']);
+
+        Route::get('/', [EvaluationSchemeController::class, 'index']);
+        Route::post('/', [EvaluationSchemeController::class, 'store']);
+
+        Route::post('/{evaluationScheme}/structure', [
+            EvaluationSchemeController::class,
+            'saveStructure',
+        ]);
+
+        Route::patch('/{evaluationScheme}/status', [
+            EvaluationSchemeController::class,
+            'setStatus',
+        ]);
+
+        Route::get('/{evaluationScheme}', [
+            EvaluationSchemeController::class,
+            'show',
+        ]);
+
+        Route::put('/{evaluationScheme}', [
+            EvaluationSchemeController::class,
+            'update',
+        ]);
+    });
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | Timetable Management
+    |--------------------------------------------------------------------------
+    */    
+    
+    Route::prefix('timetable')->group(function () {
+        Route::get('/context', [TimetableController::class, 'context']);
+        Route::get('/calendar-periods/{calendarPeriod}/slots', [TimetableController::class, 'slots']);
+
+        Route::get('/entries', [TimetableController::class, 'entries']);
+        Route::post('/entries/validate', [TimetableController::class, 'validateEntry']);
+        Route::post('/entries', [TimetableController::class, 'storeEntry']);
+
+        Route::post('/entries/{entry}/approve', [TimetableController::class, 'approveEntry']);
+        Route::post('/entries/{entry}/publish', [TimetableController::class, 'publishEntry']);
+        Route::post('/entries/{entry}/cancel', [TimetableController::class, 'cancelEntry']);
+
+        Route::post('/entries/approve-batch', [TimetableController::class, 'approveBatch']);
+        Route::post('/entries/publish-batch', [TimetableController::class, 'publishBatch']);
+
+        Route::get('/conflicts', [TimetableController::class, 'conflicts']);
+        Route::get('/weekly-grid', [TimetableController::class, 'weeklyGrid']);
+        Route::get('/reports/context', [TimetableReportController::class, 'context']);
+        Route::get('/reports/master', [TimetableReportController::class, 'master']);
+        Route::get('/reports/room-utilization', [TimetableReportController::class, 'roomUtilization']);
+        Route::post('/generation-runs', [TimetableController::class, 'generateCentralTimetable']);
+        Route::get('/generation-runs', [TimetableController::class, 'generationRuns']);
+        Route::get('/generation-runs/{run}', [TimetableController::class, 'generationRun']);
+        Route::get('/setup/context', [TimetableSlotSetupController::class, 'context']);
+
+        Route::get('/setup/slot-sets/{slotSet}/slots', [TimetableSlotSetupController::class, 'slots']);
+
+        Route::post('/setup/slot-sets', [TimetableSlotSetupController::class, 'storeSlotSet']);
+        Route::post('/setup/calendar-periods', [TimetableSlotSetupController::class, 'storePeriod']);
+        Route::post('/setup/slots', [TimetableSlotSetupController::class, 'storeSlot']);
+
+        Route::post('/setup/slot-sets/{slotSet}/copy-day', [TimetableSlotSetupController::class, 'copyDay']);
+        Route::post('/entries/{entry}/replace-teacher',[TimetableController::class, 'replacePublishedTeacher']);
+    });
+    Route::prefix('teacher/workspace')->group(function () {
+        Route::get('/', [TeacherTeachingWorkspaceController::class, 'dashboard']);
     });
 
     /*

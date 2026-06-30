@@ -32,4 +32,19 @@ class AttendanceReportController extends Controller
             'message' => 'Attendance defaulters fetched successfully.',
         ]);
     }
+    public function myActiveSubjects(AttendanceReportService $service): JsonResponse
+{
+    return response()->json([
+        'data' => $service->myActiveSubjects(),
+        'message' => 'My active attendance subjects fetched successfully.',
+    ]);
+}
+
+public function myArchivedSubjects(AttendanceReportService $service): JsonResponse
+{
+    return response()->json([
+        'data' => $service->myArchivedSubjects(),
+        'message' => 'My archived attendance subjects fetched successfully.',
+    ]);
+}
 }

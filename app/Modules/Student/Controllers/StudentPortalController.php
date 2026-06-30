@@ -230,4 +230,11 @@ public function submitCourseAddDropRequest(
         'Course add/drop request submitted successfully.'
     );
 }
+public function timetable(StudentPortalService $service): JsonResponse
+{
+    return ApiResponse::success(
+        $service->timetable(),
+        'Student published timetable fetched successfully.'
+    );
+}
 }

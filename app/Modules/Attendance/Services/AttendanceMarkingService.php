@@ -12,19 +12,32 @@ class AttendanceMarkingService
     {
         $tenantId = $this->tenantId();
 
+        if ($this->isTeacher()) {
+            return $this->teacherContext($tenantId);
+        }
+
         return [
+            'mode' => 'admin',
             'academic_sessions' => $this->academicSessions($tenantId),
             'programs' => $this->programs($tenantId),
             'academic_terms' => $this->academicTerms($tenantId, $filters),
             'student_batches' => $this->studentBatches($tenantId, $filters),
             'sections' => $this->sections($tenantId, $filters),
             'courses' => $this->registeredCourses($tenantId, $filters),
+            'published_classes' => [],
         ];
     }
 
     public function students(array $filters): array
     {
         $tenantId = $this->tenantId();
+        $publishedClass = null;
+
+        if ($this->isTeacher()) {
+            abort_if(empty($filters['timetable_entry_id']), 422, 'Select one of your published timetable classes.');
+            $publishedClass = $this->teacherPublishedClass($tenantId, (int) $filters['timetable_entry_id']);
+            $filters = array_merge($filters, $this->classScope($publishedClass));
+        }
 
         foreach ([
             'academic_session_id',
@@ -49,10 +62,7 @@ class AttendanceMarkingService
         if (Schema::hasColumn('student_course_registrations', 'section_id')) {
             $query->where('scr.section_id', $filters['section_id']);
         } else {
-            $section = DB::table('sections')
-                ->where('id', $filters['section_id'])
-                ->first();
-
+            $section = DB::table('sections')->where('id', $filters['section_id'])->first();
             if ($section) {
                 $query->where(function ($q) use ($section) {
                     $q->where('scr.section', $section->code)
@@ -63,6 +73,15 @@ class AttendanceMarkingService
 
         if (!empty($filters['academic_term_id'])) {
             $query->where('scr.academic_term_id', $filters['academic_term_id']);
+        }
+
+        if (!empty($publishedClass?->academic_teaching_group_id)) {
+            $query->join('academic_teaching_group_members as atgm', function ($join) use ($tenantId, $publishedClass) {
+                $join->on('atgm.student_enrollment_id', '=', 'scr.student_enrollment_id')
+                    ->where('atgm.tenant_id', '=', $tenantId)
+                    ->where('atgm.academic_teaching_group_id', '=', $publishedClass->academic_teaching_group_id)
+                    ->where('atgm.status_code', '=', 'active');
+            });
         }
 
         return $query
@@ -79,6 +98,7 @@ class AttendanceMarkingService
                 'se.roll_no',
                 'se.registration_no',
             ])
+            ->distinct()
             ->orderBy('se.roll_sequence_no')
             ->orderBy('s.full_name')
             ->get()
@@ -104,6 +124,19 @@ class AttendanceMarkingService
     public function save(array $data): array
     {
         $tenantId = $this->tenantId();
+
+        if ($this->isTeacher()) {
+            abort_if(empty($data['timetable_entry_id']), 422, 'A published timetable class is required for teacher attendance.');
+            $publishedClass = $this->teacherPublishedClass($tenantId, (int) $data['timetable_entry_id']);
+            $data = array_merge($data, $this->classScope($publishedClass));
+
+            $attendanceDay = Carbon::parse($data['attendance_date'])->dayOfWeekIso;
+            abort_if(
+                !empty($publishedClass->day_of_week) && (int) $publishedClass->day_of_week !== $attendanceDay,
+                422,
+                'Attendance date does not match the selected published timetable day.'
+            );
+        }
 
         abort_if(empty($data['records']), 422, 'Attendance records are required.');
 
@@ -153,9 +186,34 @@ class AttendanceMarkingService
     private function createOrUpdateSession(int $tenantId, array $data): int
     {
         $attendanceDate = Carbon::parse($data['attendance_date'])->toDateString();
+        if (!empty($data['timetable_entry_id'])) {
+            $facultyId = DB::table('faculty_members')
+                ->where('tenant_id', $tenantId)
+                ->where('user_id', auth()->id())
+                ->where('status_code', 'active')
+                ->whereNull('deleted_at')
+                ->value('id');
 
+            abort_if(!$facultyId, 403, 'No active faculty profile is linked to this user.');
+
+            $publishedEntry = DB::table('timetable_entries')
+                ->where('tenant_id', $tenantId)
+                ->where('id', $data['timetable_entry_id'])
+                ->where('faculty_member_id', $facultyId)
+                ->where('status_code', 'published')
+                ->where('is_active', 1)
+                ->whereNull('deleted_at')
+                ->first();
+
+            abort_if(
+                !$publishedEntry,
+                403,
+                'You can mark attendance only for your active published timetable class.'
+            );
+        }
         $lookup = [
             'tenant_id' => $tenantId,
+            'timetable_entry_id' => $data['timetable_entry_id'] ?? null,
             'academic_session_id' => $data['academic_session_id'],
             'academic_term_id' => $data['academic_term_id'] ?? null,
             'program_id' => $data['program_id'],
@@ -262,6 +320,138 @@ class AttendanceMarkingService
         ]);
 
         DB::table('attendance_records')->insert($payload);
+    }
+
+    private function isTeacher(): bool
+    {
+        return auth()->check() && auth()->user()?->user_type === 'teacher';
+    }
+
+    private function teacherContext(int $tenantId): array
+    {
+        $classes = $this->publishedTeacherClasses($tenantId);
+
+        return [
+            'mode' => 'teacher',
+            'academic_sessions' => [],
+            'programs' => [],
+            'academic_terms' => [],
+            'student_batches' => [],
+            'sections' => [],
+            'courses' => [],
+            'published_classes' => $classes,
+        ];
+    }
+
+    private function teacherFacultyId(int $tenantId): int
+    {
+        $facultyId = DB::table('faculty_members')
+            ->where('tenant_id', $tenantId)
+            ->where('user_id', auth()->id())
+            ->where('status_code', 'active')
+            ->whereNull('deleted_at')
+            ->value('id');
+
+        abort_if(!$facultyId, 403, 'Your teacher profile is not active or is not linked to this user account.');
+
+        return (int) $facultyId;
+    }
+
+    private function publishedTeacherClasses(int $tenantId): array
+    {
+        $facultyId = $this->teacherFacultyId($tenantId);
+
+        return DB::table('timetable_entries as te')
+            ->join('course_offerings as co', 'co.id', '=', 'te.course_offering_id')
+            ->leftJoin('curriculum_subjects as cs', 'cs.id', '=', 'co.curriculum_subject_id')
+            ->leftJoin('student_batches as sb', 'sb.id', '=', 'co.student_batch_id')
+            ->leftJoin('sections as sec', 'sec.id', '=', 'co.section_id')
+            ->leftJoin('academic_teaching_groups as atg', 'atg.id', '=', 'co.academic_teaching_group_id')
+            ->where('te.tenant_id', $tenantId)
+            ->where('te.faculty_member_id', $facultyId)
+            ->where('te.is_active', true)
+            ->where('te.status_code', 'published')
+            ->whereNull('te.deleted_at')
+            ->whereIn('co.status_code', ['offered', 'allocated', 'scheduled'])
+            ->select([
+                'te.id as value',
+                'te.id as timetable_entry_id',
+                'te.day_of_week',
+                'co.academic_session_id',
+                'co.academic_term_id',
+                'sb.program_id',
+                'co.student_batch_id',
+                'co.section_id',
+                'co.academic_teaching_group_id',
+                'co.curriculum_subject_id',
+                'co.subject_type_code',
+                'cs.subject_code as course_code',
+                'cs.subject_name as course_title',
+                'sec.code as section_code',
+                'sec.name as section_name',
+                'atg.group_code',
+                'atg.group_name',
+            ])
+            ->orderBy('te.day_of_week')
+            ->orderBy('te.id')
+            ->get()
+            ->map(function ($row) {
+                $scope = $row->group_name
+                    ? "{$row->group_code} - {$row->group_name}"
+                    : "{$row->section_code} - {$row->section_name}";
+
+                return [
+                    'value' => $row->value,
+                    'label' => trim("{$row->course_code} - {$row->course_title} | {$scope}"),
+                    'meta' => (array) $row,
+                ];
+            })
+            ->values()
+            ->toArray();
+    }
+
+    private function teacherPublishedClass(int $tenantId, int $timetableEntryId): object
+    {
+        $facultyId = $this->teacherFacultyId($tenantId);
+
+        $row = DB::table('timetable_entries as te')
+            ->join('course_offerings as co', 'co.id', '=', 'te.course_offering_id')
+            ->join('student_batches as sb', 'sb.id', '=', 'co.student_batch_id')
+            ->where('te.tenant_id', $tenantId)
+            ->where('te.id', $timetableEntryId)
+            ->where('te.faculty_member_id', $facultyId)
+            ->where('te.is_active', true)
+            ->where('te.status_code', 'published')
+            ->whereNull('te.deleted_at')
+            ->whereIn('co.status_code', ['offered', 'allocated', 'scheduled'])
+            ->select([
+                'te.id',
+                'te.day_of_week',
+                'co.academic_session_id',
+                'co.academic_term_id',
+                'sb.program_id',
+                'co.student_batch_id',
+                'co.section_id',
+                'co.academic_teaching_group_id',
+                'co.curriculum_subject_id',
+            ])
+            ->first();
+
+        abort_if(!$row, 403, 'This class is not one of your active published timetable classes.');
+
+        return $row;
+    }
+
+    private function classScope(object $class): array
+    {
+        return [
+            'academic_session_id' => $class->academic_session_id,
+            'academic_term_id' => $class->academic_term_id,
+            'program_id' => $class->program_id,
+            'student_batch_id' => $class->student_batch_id,
+            'section_id' => $class->section_id,
+            'curriculum_subject_id' => $class->curriculum_subject_id,
+        ];
     }
 
     private function academicSessions(int $tenantId): array
